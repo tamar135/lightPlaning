@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+ifcopenshell
+networkx
+python-multipart
