@@ -8,6 +8,7 @@ import aiofiles
 from fastapi import UploadFile, HTTPException
 
 import IFCProcessor
+import DXFProcessor
 from MODEL.database import Database
 from MODEL.Usage import Usage
 from MODEL.Light import Light
@@ -35,12 +36,12 @@ class fileProcessor:
         if not file or not file.filename:
             return False, "לא הועלה קובץ."
 
-        allowed_extensions = [".ifc"]
+        allowed_extensions = [".ifc", ".dxf"]
         file_extension = Path(file.filename).suffix.lower()
         logger.debug("File extension: %s", file_extension)
 
         if file_extension not in allowed_extensions:
-            return False, "סוג קובץ לא תקין. מותר רק קבצי IFC."
+            return False, "סוג קובץ לא תקין. מותר רק קבצי IFC או DXF."
 
         return True, ""
 
@@ -55,21 +56,31 @@ class fileProcessor:
         temp_file_path = None
         json_path = None
 
-        # שמירת קובץ IFC זמני
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ifc") as temp_file:
+        # בדיקת סוג הקובץ
+        file_extension = Path(file.filename).suffix.lower()
+
+        # שמירת קובץ זמני עם הסיומת המתאימה
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
             file_data = await file.read()
             temp_file.write(file_data)
             temp_file_path = temp_file.name
-            logger.debug("Saved IFC file to: %s", temp_file_path)
+            logger.debug(f"Saved {file_extension} file to: {temp_file_path}")
 
         try:
-            # עיבוד הקובץ ל-JSON
-            logger.debug("Calling IFCProcessor.process_ifc_file with path: %s", temp_file_path)
-            json_path = IFCProcessor.process_ifc_file(temp_file_path, room_type)
+            # עיבוד הקובץ ל-JSON בהתאם לסוג הקובץ
+            if file_extension == ".ifc":
+                logger.debug("Processing IFC file with path: %s", temp_file_path)
+                json_path = IFCProcessor.process_ifc_file(temp_file_path, room_type)
+            elif file_extension == ".dxf":
+                logger.debug("Processing DXF file with path: %s", temp_file_path)
+                json_path = DXFProcessor.process_dxf_file(temp_file_path, room_type)
+            else:
+                raise ValueError(f"Unsupported file type: {file_extension}")
+
             logger.debug("Received json_path: %s", json_path)
             if not isinstance(json_path, str):
                 logger.error("json_path is not a string: %s", type(json_path))
-                raise ValueError("IFCProcessor.process_ifc_file must return a string path")
+                raise ValueError("Processor must return a string path")
 
             async with aiofiles.open(json_path, 'r', encoding='utf-8') as f:
                 json_content = await f.read()
@@ -110,6 +121,8 @@ class fileProcessor:
             try:
                 if isinstance(usage_data, tuple) and len(usage_data) > 0:
                     usage_id = usage_data[0]
+                elif isinstance(usage_data, dict) and 'id' in usage_data:
+                    usage_id = usage_data['id']
                 elif isinstance(usage_data, dict) and 'usage_id' in usage_data:
                     usage_id = usage_data['usage_id']
                 elif isinstance(usage_data, int):
@@ -145,9 +158,9 @@ class fileProcessor:
                 }
             }
 
-            # בניית הגרף - העבר את כל התצורות
-            logger.debug("Building graph from JSON path: %s with room type %s", json_path, room_type.lower())
-            builder = BuildGraph(room_lighting_config)
+            # בניית הגרף
+            logger.debug("Building graph from JSON path: %s", json_path)
+            builder = BuildGraph(room_lighting_config.get(room_type.lower(), {}))
             try:
                 graph = builder.build_graph_from_json(json_path)
                 logger.debug("Graph built successfully with %d vertices",
@@ -189,7 +202,6 @@ class fileProcessor:
                             # המשך לנורה הבאה גם אם היתה שגיאה
 
             logger.debug("Created %d lights", light_count)
-            # החזרת התוצאה המתוקנת
             return {"usage_id": usage_id, "message": f"File processed successfully, created {light_count} lights"}
 
         except Exception as e:
