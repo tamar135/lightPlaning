@@ -1,17 +1,22 @@
-# IFCProcessor.py
 import ifcopenshell
+import ifcopenshell.geom
 import json
 import tempfile
 import logging
 import os
 from math import sqrt
+import numpy as np
 
-# הגדרת לוגר
 from RoomType import RoomType
-from MaterialReflection import MaterialReflection  # ייבוא ה-ENUM של החומר
+from MaterialReflection import MaterialReflection
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# הגדרות גיאומטריה גלובליות
+GEOMETRY_SETTINGS = ifcopenshell.geom.settings()
+GEOMETRY_SETTINGS.set(GEOMETRY_SETTINGS.USE_WORLD_COORDS, True)
+
 
 
 def process_ifc_file(file_path: str, room_type: str) -> str:
@@ -28,14 +33,12 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
     logger.debug("מעבד קובץ IFC: %s", file_path)
 
     try:
-        # טעינת מודל ה-IFC
         model = ifcopenshell.open(file_path)
         logger.debug("קובץ IFC נטען בהצלחה. סכמה: %s", model.schema)
     except Exception as e:
         logger.error("שגיאה בטעינת קובץ IFC: %s", str(e))
         raise
 
-    # מידע כללי על החדר
     room_info = extract_room_info(model)
     if not room_type:
         room_type = room_info.get("RoomType", RoomType.UNKNOWN.room_name)
@@ -46,7 +49,6 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
     logger.debug("זוהה חדר מסוג %s עם תאורה מומלצת %d לוקס",
                  room_type, recommended_lux)
 
-    # יצירת המבנה הבסיסי לתוצאה
     results = [
         {"RecommendedLux": recommended_lux},
         {"RoomType": room_type},
@@ -54,7 +56,6 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
         {"RoomArea": room_info.get("RoomArea", 20.0)}
     ]
 
-    # חילוץ כל האלמנטים
     elements_by_type = {
         "walls": ["IfcWall", "IfcWallStandardCase"],
         "windows": ["IfcWindow", "IfcWindowStandardCase"],
@@ -86,12 +87,6 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
             except Exception as e:
                 logger.warning("שגיאה בטעינת אלמנטים מסוג %s: %s", ifc_type, str(e))
 
-    # הוספת נקודת אמצע החדר - חשוב למערכת התאורה
-    center_data = create_center_point(room_info)
-    if center_data:
-        elements_data.append(center_data)
-
-    # שילוב כל המידע ברשימת התוצאות
     results.extend(elements_data)
 
     # שמירה לקובץ JSON זמני
@@ -106,34 +101,163 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
         raise
 
 
+def extract_geometry_coordinates(element):
+    """
+    מחלץ קואורדינטות גיאומטריות אמיתיות של אלמנט
+
+    Returns:
+        dict: מילון עם X, Y, Z, Width, Length, Height
+    """
+    result = {
+        "X": 0, "Y": 0, "Z": 0,
+        "Width": 0, "Length": 0, "Height": 0
+    }
+
+    try:
+        # יצירת הגיאומטריה באמצעות ifcopenshell.geom
+        geom = ifcopenshell.geom.create_shape(GEOMETRY_SETTINGS, element)
+
+        if geom and geom.geometry:
+            # חילוץ כל הקודקודים
+            verts = geom.geometry.verts
+
+            if len(verts) >= 3:
+                # המרה לרשימת נקודות (x, y, z)
+                points = [(verts[i], verts[i + 1], verts[i + 2])
+                          for i in range(0, len(verts), 3)]
+
+                if points:
+                    # חישוב bounding box
+                    x_coords = [p[0] for p in points]
+                    y_coords = [p[1] for p in points]
+                    z_coords = [p[2] for p in points]
+
+                    min_x, max_x = min(x_coords), max(x_coords)
+                    min_y, max_y = min(y_coords), max(y_coords)
+                    min_z, max_z = min(z_coords), max(z_coords)
+
+                    # עדכון המיקום והמידות
+                    result["X"] = min_x
+                    result["Y"] = min_y
+                    result["Z"] = min_z
+                    result["Width"] = max_x - min_x
+                    result["Length"] = max_y - min_y
+                    result["Height"] = max_z - min_z
+
+                    logger.debug("חולצו קואורדינטות גיאומטריות: X=%.2f, Y=%.2f, Z=%.2f, W=%.2f, L=%.2f, H=%.2f",
+                                 result["X"], result["Y"], result["Z"],
+                                 result["Width"], result["Length"], result["Height"])
+
+                    return result
+
+    except Exception as e:
+        logger.debug("לא ניתן לחלץ גיאומטריה עבור אלמנט %s: %s",
+                     getattr(element, 'GlobalId', 'unknown'), str(e))
+
+    # אם נכשל החילוץ הגיאומטרי - נסה שיטות אחרות
+    return extract_fallback_location_and_dimensions(element)
+
+
+def extract_fallback_location_and_dimensions(element):
+    """
+    שיטה חלופית לחילוץ מיקום ומידות כשהגיאומטריה לא עובדת
+    """
+    result = {
+        "X": 0, "Y": 0, "Z": 0,
+        "Width": 0, "Length": 0, "Height": 0
+    }
+
+    # ניסיון לחילוץ מיקום מתוך ObjectPlacement
+    try:
+        placement = element.ObjectPlacement
+        if placement and hasattr(placement, "RelativePlacement"):
+            rel_placement = placement.RelativePlacement
+            if hasattr(rel_placement, "Location") and rel_placement.Location:
+                coords = rel_placement.Location.Coordinates
+                result["X"] = float(coords[0])
+                result["Y"] = float(coords[1])
+                result["Z"] = float(coords[2]) if len(coords) > 2 else 0
+    except Exception as e:
+        logger.debug("לא ניתן לחלץ מיקום יחסי: %s", str(e))
+
+    # ניסיון לחילוץ מידות מתוך מאפיינים
+    try:
+        quantities = {}
+
+        if hasattr(element, "IsDefinedBy"):
+            for rel in element.IsDefinedBy:
+                if rel.is_a("IfcRelDefinesByProperties") and hasattr(rel, "RelatingPropertyDefinition"):
+                    prop_def = rel.RelatingPropertyDefinition
+
+                    if prop_def.is_a("IfcElementQuantity") and hasattr(prop_def, "Quantities"):
+                        for quantity in prop_def.Quantities:
+                            if quantity.is_a("IfcQuantityLength") and hasattr(quantity, "LengthValue"):
+                                name_upper = quantity.Name.upper()
+                                if "LENGTH" in name_upper:
+                                    quantities["Length"] = float(quantity.LengthValue)
+                                elif "WIDTH" in name_upper:
+                                    quantities["Width"] = float(quantity.LengthValue)
+                                elif "HEIGHT" in name_upper:
+                                    quantities["Height"] = float(quantity.LengthValue)
+
+        # עדכון התוצאה עם הערכים שנמצאו
+        for key in ["Length", "Width", "Height"]:
+            if key in quantities and quantities[key] > 0:
+                result[key] = quantities[key]
+
+    except Exception as e:
+        logger.debug("שגיאה בחילוץ מידות מתוך מאפיינים: %s", str(e))
+
+    # ברירות מחדל לפי סוג האלמנט אם עדיין אין מידות
+    if result["Width"] == 0 or result["Length"] == 0 or result["Height"] == 0:
+        element_type = element.is_a()
+        apply_default_dimensions(result, element_type)
+
+    return result
+
+
+def apply_default_dimensions(result, element_type):
+    """מחיל מידות ברירת מחדל לפי סוג האלמנט"""
+    defaults = {
+        "IfcWall": {"Width": 0.15, "Height": 2.5, "Length": 3.0},
+        "IfcWallStandardCase": {"Width": 0.15, "Height": 2.5, "Length": 3.0},
+        "IfcDoor": {"Width": 0.9, "Height": 2.1, "Length": 0.1},
+        "IfcDoorStandardCase": {"Width": 0.9, "Height": 2.1, "Length": 0.1},
+        "IfcWindow": {"Width": 1.2, "Height": 1.0, "Length": 0.05},
+        "IfcWindowStandardCase": {"Width": 1.2, "Height": 1.0, "Length": 0.05},
+        "IfcSlab": {"Height": 0.2}
+    }
+
+    if element_type in defaults:
+        for key, value in defaults[element_type].items():
+            if result[key] == 0:
+                result[key] = value
+
+
 def extract_room_info(model):
     """מחלץ מידע בסיסי על החדר מתוך המודל"""
     room_info = {
-        "RecommendedLux": 300,  # ערך ברירת מחדל
-        "RoomType": "bedroom",  # ערך ברירת מחדל
-        "RoomHeight": 2.5,  # ערך ברירת מחדל
-        "RoomArea": 20.0  # ערך ברירת מחדל
+        "RecommendedLux": 300,
+        "RoomType": "bedroom",
+        "RoomHeight": 2.5,
+        "RoomArea": 20.0
     }
 
-    # ניסיון לחלץ חדרים/מרחבים
     try:
         spaces = model.by_type("IfcSpace")
 
         if spaces:
             logger.debug("נמצאו %d מרחבים במודל", len(spaces))
-            # נשתמש במרחב הראשון שנמצא (או באוסף המרחבים הגדול ביותר)
             largest_space = spaces[0]
             largest_area = 0
 
             for space in spaces:
-                # חיפוש מידע על סוג החדר
                 psets = get_element_properties(space)
 
-                # חילוץ שם/סוג החדר
+                # זיהוי סוג החדר
                 space_name = getattr(space, "Name", "").lower() if hasattr(space, "Name") else ""
                 space_long_name = getattr(space, "LongName", "").lower() if hasattr(space, "LongName") else ""
 
-                # זיהוי סוג החדר לפי מילות מפתח
                 room_types = {
                     "bedroom": ["bedroom", "חדר שינה", "שינה", "bed", "sleeping"],
                     "living": ["living", "סלון", "מגורים", "lounge"],
@@ -142,18 +266,16 @@ def extract_room_info(model):
                     "office": ["office", "משרד", "study", "עבודה"]
                 }
 
-                detected_type = room_info["RoomType"]  # ברירת מחדל
+                detected_type = room_info["RoomType"]
                 for rtype, keywords in room_types.items():
                     if any(kw in space_name for kw in keywords) or any(kw in space_long_name for kw in keywords):
                         detected_type = rtype
                         break
 
-                # אם מצאנו סוג חדר, נעדכן את המידע
                 room_info["RoomType"] = detected_type
 
-                # חיפוש מידע על גודל החדר
+                # חילוץ מידות החדר
                 try:
-                    # חיפוש שטח וגובה בתוך מאפייני האלמנט
                     for prop_set_name, props in psets.items():
                         if "Area" in props:
                             area_value = float(props["Area"])
@@ -173,178 +295,8 @@ def extract_room_info(model):
     return room_info
 
 
-def extract_room_dimensions(model):
-    """
-    מחלץ את מידות החדרים (גובה, שטח, אורך, רוחב) באופן מפורט
-
-    Args:
-        model: מודל IFC טעון
-
-    Returns:
-        dict: מילון עם מידות החדר: גובה, שטח, אורך, רוחב
-    """
-    dimensions = {
-        "height": 2.5,  # גובה ברירת מחדל
-        "area": 20.0,  # שטח ברירת מחדל
-        "length": 5.0,  # אורך ברירת מחדל
-        "width": 4.0  # רוחב ברירת מחדל
-    }
-
-    try:
-        # שיטה 1: חיפוש אובייקטים מסוג חדר/מרחב (IfcSpace)
-        spaces = model.by_type("IfcSpace")
-        if spaces:
-            logger.debug("נמצאו %d מרחבים מסוג IfcSpace", len(spaces))
-
-            # נחפש את החדר הגדול ביותר
-            largest_space = None
-            largest_area = 0
-
-            for space in spaces:
-                # ניסיון לחלץ שטח
-                space_area = 0
-
-                # ניסיון 1: מתוך מאפיינים
-                properties = get_element_properties(space)
-                for pset_name, props in properties.items():
-                    for prop_name, prop_value in props.items():
-                        # חיפוש שטח
-                        if "Area" in prop_name:
-                            try:
-                                space_area = float(prop_value)
-                                logger.debug("נמצא שטח %f עבור חדר %s", space_area, getattr(space, "Name", "ללא שם"))
-                            except (ValueError, TypeError):
-                                pass
-
-                        # חיפוש גובה
-                        if "Height" in prop_name:
-                            try:
-                                dimensions["height"] = float(prop_value)
-                                logger.debug("נמצא גובה %f עבור חדר %s", dimensions["height"],
-                                             getattr(space, "Name", "ללא שם"))
-                            except (ValueError, TypeError):
-                                pass
-
-                        # חיפוש אורך ורוחב
-                        if "Length" in prop_name:
-                            try:
-                                dimensions["length"] = float(prop_value)
-                                logger.debug("נמצא אורך %f עבור חדר %s", dimensions["length"],
-                                             getattr(space, "Name", "ללא שם"))
-                            except (ValueError, TypeError):
-                                pass
-
-                        if "Width" in prop_name:
-                            try:
-                                dimensions["width"] = float(prop_value)
-                                logger.debug("נמצא רוחב %f עבור חדר %s", dimensions["width"],
-                                             getattr(space, "Name", "ללא שם"))
-                            except (ValueError, TypeError):
-                                pass
-
-                # ניסיון 2: מתוך כמויות
-                if hasattr(space, "IsDefinedBy"):
-                    for rel in space.IsDefinedBy:
-                        if rel.is_a("IfcRelDefinesByProperties"):
-                            qset = rel.RelatingPropertyDefinition
-                            if qset.is_a("IfcElementQuantity"):
-                                for qty in qset.Quantities:
-                                    if qty.is_a("IfcQuantityArea"):
-                                        space_area = float(qty.AreaValue)
-                                        logger.debug("נמצא שטח %f מתוך IsDefinedBy עבור חדר %s",
-                                                     space_area, getattr(space, "Name", "ללא שם"))
-
-                                    if qty.is_a("IfcQuantityLength"):
-                                        if "Height" in qty.Name:
-                                            dimensions["height"] = float(qty.LengthValue)
-                                            logger.debug("נמצא גובה %f מתוך IsDefinedBy", dimensions["height"])
-                                        elif "Length" in qty.Name:
-                                            dimensions["length"] = float(qty.LengthValue)
-                                            logger.debug("נמצא אורך %f מתוך IsDefinedBy", dimensions["length"])
-                                        elif "Width" in qty.Name:
-                                            dimensions["width"] = float(qty.LengthValue)
-                                            logger.debug("נמצא רוחב %f מתוך IsDefinedBy", dimensions["width"])
-
-                # אם מצאנו שטח גדול יותר, נעדכן את החדר הגדול ביותר
-                if space_area > largest_area:
-                    largest_area = space_area
-                    largest_space = space
-                    dimensions["area"] = space_area
-
-            # אם מצאנו חדר גדול אבל לא היו לו מידות אורך ורוחב, ננסה לחשב
-            if largest_area > 0 and (dimensions["length"] == 5.0 or dimensions["width"] == 4.0):
-                # הערכה של אורך ורוחב מתוך שטח, בהנחה של יחס 4:5
-                dimensions["length"] = sqrt(largest_area * 5 / 4)
-                dimensions["width"] = sqrt(largest_area * 4 / 5)
-                logger.debug("חושבו אורך ורוחב מתוך שטח: אורך=%f, רוחב=%f",
-                             dimensions["length"], dimensions["width"])
-
-        # שיטה 2: אם לא מצאנו מידות, ננסה לחלץ מקירות
-        if dimensions["height"] == 2.5:  # אם עדיין ערך ברירת מחדל
-            walls = model.by_type("IfcWall") + model.by_type("IfcWallStandardCase")
-            logger.debug("מנסה לחלץ גובה מתוך %d קירות", len(walls))
-
-            max_z = 0
-            for wall in walls:
-                if hasattr(wall, "IsDefinedBy"):
-                    for rel in wall.IsDefinedBy:
-                        if rel.is_a("IfcRelDefinesByProperties"):
-                            qset = rel.RelatingPropertyDefinition
-                            if qset.is_a("IfcElementQuantity"):
-                                for qty in qset.Quantities:
-                                    if qty.is_a("IfcQuantityLength") and "Height" in qty.Name:
-                                        wall_height = float(qty.LengthValue)
-                                        if wall_height > max_z:
-                                            max_z = wall_height
-                                            dimensions["height"] = wall_height
-                                            logger.debug("נמצא גובה %f מתוך קיר", dimensions["height"])
-
-        # שיטה 3: חישוב מידות מתוך קואורדינטות קירות
-        if dimensions["length"] == 5.0 or dimensions["width"] == 4.0:  # אם עדיין ערכי ברירת מחדל
-            walls = model.by_type("IfcWall") + model.by_type("IfcWallStandardCase")
-            x_coords = []
-            y_coords = []
-
-            for wall in walls:
-                try:
-                    if hasattr(wall, "ObjectPlacement") and wall.ObjectPlacement:
-                        if hasattr(wall.ObjectPlacement,
-                                   "RelativePlacement") and wall.ObjectPlacement.RelativePlacement:
-                            if hasattr(wall.ObjectPlacement.RelativePlacement,
-                                       "Location") and wall.ObjectPlacement.RelativePlacement.Location:
-                                coords = wall.ObjectPlacement.RelativePlacement.Location.Coordinates
-                                x_coords.append(float(coords[0]))
-                                y_coords.append(float(coords[1]))
-                except Exception as e:
-                    logger.debug("שגיאה בחילוץ קואורדינטות קיר: %s", str(e))
-
-            if x_coords and y_coords:
-                min_x, max_x = min(x_coords), max(x_coords)
-                min_y, max_y = min(y_coords), max(y_coords)
-
-                width = max_x - min_x
-                length = max_y - min_y
-
-                # רק אם המידות הגיוניות נעדכן
-                if width > 1.0 and length > 1.0:
-                    dimensions["width"] = width
-                    dimensions["length"] = length
-                    dimensions["area"] = width * length
-                    logger.debug("חושבו מידות מתוך קואורדינטות קירות: אורך=%f, רוחב=%f, שטח=%f",
-                                 length, width, dimensions["area"])
-
-        logger.debug("מידות סופיות: גובה=%.2f, שטח=%.2f, אורך=%.2f, רוחב=%.2f",
-                     dimensions["height"], dimensions["area"], dimensions["length"], dimensions["width"])
-
-    except Exception as e:
-        logger.error("שגיאה בחילוץ מידות החדר: %s", str(e))
-
-    return dimensions
-
-
 def extract_element_data(element, model, category):
     """מחלץ מידע מפורט על אלמנט בודד"""
-    # חילוץ מידע בסיסי
     element_name = getattr(element, "Name", None) or ""
     element_type = element.is_a()
 
@@ -383,24 +335,24 @@ def extract_element_data(element, model, category):
             element_subtype = ftype
             break
 
-    # נסה לחלץ מיקום ומידות
-    location_data = extract_location_and_dimensions(element)
+    # חילוץ מיקום ומידות באמצעות הגיאומטריה המתוקנת
+    location_data = extract_geometry_coordinates(element)
 
     # חלץ חומרים
     materials_str = extract_materials(element, model)
 
-    # קביעת מאפייני החזרת אור לפי החומר בעזרת ה-ENUM
+    # קביעת מאפייני החזרת אור לפי החומר
     material_reflection = MaterialReflection.get_by_material_name(materials_str)
 
     # קביעת דרישות תאורה לאלמנט
     required_lux = 0
     if element_subtype in ["table", "desk", "counter"]:
         if element_subtype == "desk":
-            required_lux = 500  # שולחנות עבודה דורשים יותר תאורה
+            required_lux = 500
         else:
-            required_lux = 300  # שולחנות רגילים
+            required_lux = 300
 
-    # יצירת המילון שיוחזר - רק עם מיקום 3D, אורך, רוחב, גובה, חומר וסוג
+    # יצירת המילון שיוחזר
     element_data = {
         "ElementType": element_subtype or element_type_hebrew,
         "X": location_data.get("X", 0),
@@ -413,109 +365,11 @@ def extract_element_data(element, model, category):
         "RequiredLuks": required_lux
     }
 
-    # הוספת מקדם החזרת אור מה-ENUM
+    # הוספת מקדם החזרת אור
     if material_reflection.reflection_factor > 0:
         element_data["ReflectionFactor"] = material_reflection.reflection_factor
 
     return element_data
-
-
-def extract_location_and_dimensions(element):
-    """מחלץ מיקום ומידות של אלמנט"""
-    result = {
-        "X": 0, "Y": 0, "Z": 0,
-        "Width": 0, "Length": 0, "Height": 0
-    }
-
-    # חילוץ מיקום מתוך ObjectPlacement
-    try:
-        placement = element.ObjectPlacement
-        if placement and hasattr(placement, "RelativePlacement"):
-            rel_placement = placement.RelativePlacement
-            if hasattr(rel_placement, "Location") and rel_placement.Location:
-                coords = rel_placement.Location.Coordinates
-                result["X"] = float(coords[0])
-                result["Y"] = float(coords[1])
-                result["Z"] = float(coords[2])
-    except Exception as e:
-        logger.debug("לא ניתן לחלץ מיקום יחסי: %s", str(e))
-
-    # חילוץ מידות מתוך מאפיינים
-    try:
-        quantities = {}
-
-        # בדיקה ישירה של קשרים למאפיינים
-        if hasattr(element, "IsDefinedBy"):
-            for rel in element.IsDefinedBy:
-                # חיפוש ב-IfcRelDefinesByProperties
-                if rel.is_a("IfcRelDefinesByProperties") and hasattr(rel, "RelatingPropertyDefinition"):
-                    prop_def = rel.RelatingPropertyDefinition
-
-                    # בדיקה עבור IfcElementQuantity
-                    if prop_def.is_a("IfcElementQuantity") and hasattr(prop_def, "Quantities"):
-                        for quantity in prop_def.Quantities:
-                            # בדיקת סוגי מידות שונים
-                            if quantity.is_a("IfcQuantityLength") and hasattr(quantity, "LengthValue"):
-                                if "Length" in quantity.Name or "LENGTH" in quantity.Name.upper():
-                                    quantities["Length"] = float(quantity.LengthValue)
-                                elif "Width" in quantity.Name or "WIDTH" in quantity.Name.upper():
-                                    quantities["Width"] = float(quantity.LengthValue)
-                                elif "Height" in quantity.Name or "HEIGHT" in quantity.Name.upper():
-                                    quantities["Height"] = float(quantity.LengthValue)
-                            elif quantity.is_a("IfcQuantityArea") and hasattr(quantity, "AreaValue"):
-                                quantities["Area"] = float(quantity.AreaValue)
-
-        # עדכון התוצאה עם הערכים שנמצאו
-        for key in ["Length", "Width", "Height"]:
-            if key in quantities and quantities[key] > 0:
-                result[key] = quantities[key]
-
-        # אם זה אלמנט קיר וחסרות מידות, הערך אומדנים סבירים
-        if element.is_a("IfcWall") or element.is_a("IfcWallStandardCase"):
-            if result["Width"] == 0:
-                result["Width"] = 0.15  # עובי קיר טיפוסי
-
-            # חישוב אורך הקיר אם לא נמצא
-            if result["Length"] == 0 and hasattr(element, "Representation"):
-                # תנסה להשתמש בייצוג של הקיר לחישוב אורך
-                pass
-
-    except Exception as e:
-        logger.debug("שגיאה בחילוץ מידות מתוך מאפיינים: %s", str(e))
-
-    # אם עדיין חסרות מידות, השתמש בערכים ברירת מחדל לפי סוג האלמנט
-    if result["Width"] == 0 or result["Length"] == 0 or result["Height"] == 0:
-        element_type = element.is_a()
-
-        if "Wall" in element_type:
-            if result["Width"] == 0:
-                result["Width"] = 0.15  # עובי קיר ממוצע
-            if result["Height"] == 0:
-                result["Height"] = 2.5  # גובה קיר ממוצע
-            if result["Length"] == 0:
-                result["Length"] = 3.0  # אורך קיר ממוצע
-
-        elif "Door" in element_type:
-            if result["Width"] == 0:
-                result["Width"] = 0.9  # רוחב דלת ממוצע
-            if result["Height"] == 0:
-                result["Height"] = 2.1  # גובה דלת ממוצע
-            if result["Length"] == 0:
-                result["Length"] = 0.1  # עובי דלת ממוצע
-
-        elif "Window" in element_type:
-            if result["Width"] == 0:
-                result["Width"] = 1.2  # רוחב חלון ממוצע
-            if result["Height"] == 0:
-                result["Height"] = 1.0  # גובה חלון ממוצע
-            if result["Length"] == 0:
-                result["Length"] = 0.05  # עובי חלון ממוצע
-
-        elif "Slab" in element_type:
-            if result["Height"] == 0:
-                result["Height"] = 0.2  # עובי רצפה/תקרה ממוצע
-
-    return result
 
 
 def get_element_properties(element):
@@ -523,7 +377,6 @@ def get_element_properties(element):
     properties = {}
 
     try:
-        # גישה ישירה למאפיינים
         if hasattr(element, "IsDefinedBy"):
             for definition in element.IsDefinedBy:
                 if definition.is_a("IfcRelDefinesByProperties"):
@@ -548,7 +401,6 @@ def extract_materials(element, model):
     materials = []
 
     try:
-        # גישה ישירה לחומרים
         if hasattr(element, "HasAssociations"):
             for association in element.HasAssociations:
                 if association.is_a("IfcRelAssociatesMaterial"):
@@ -565,18 +417,3 @@ def extract_materials(element, model):
         logger.debug("שגיאה בחילוץ חומרים: %s", str(e))
 
     return ", ".join(materials) if materials else "לא ידוע"
-
-
-def create_center_point(room_info):
-    """יוצר נקודת מרכז לחדר שתשמש כנקודת ייחוס"""
-    return {
-        "ElementType": "center_point",
-        "X": 0,
-        "Y": 0,
-        "Z": 0,
-        "Width": 0,
-        "Length": 0,
-        "Height": 0,
-        "RequiredLuks": 0,
-        "Material": ""
-    }

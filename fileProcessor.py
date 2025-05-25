@@ -8,7 +8,6 @@ import aiofiles
 from fastapi import UploadFile, HTTPException
 
 import IFCProcessor
-import DXFProcessor
 from MODEL.database import Database
 from MODEL.Usage import Usage
 from MODEL.Light import Light
@@ -36,12 +35,12 @@ class fileProcessor:
         if not file or not file.filename:
             return False, "לא הועלה קובץ."
 
-        allowed_extensions = [".ifc", ".dxf"]
+        allowed_extensions = [".ifc"]
         file_extension = Path(file.filename).suffix.lower()
         logger.debug("File extension: %s", file_extension)
 
         if file_extension not in allowed_extensions:
-            return False, "סוג קובץ לא תקין. מותר רק קבצי IFC או DXF."
+            return False, "סוג קובץ לא תקין. מותר רק קבצי IFC"
 
         return True, ""
 
@@ -71,9 +70,6 @@ class fileProcessor:
             if file_extension == ".ifc":
                 logger.debug("Processing IFC file with path: %s", temp_file_path)
                 json_path = IFCProcessor.process_ifc_file(temp_file_path, room_type)
-            elif file_extension == ".dxf":
-                logger.debug("Processing DXF file with path: %s", temp_file_path)
-                json_path = DXFProcessor.process_dxf_file(temp_file_path, room_type)
             else:
                 raise ValueError(f"Unsupported file type: {file_extension}")
 

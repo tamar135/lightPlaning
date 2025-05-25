@@ -1,189 +1,207 @@
-# IFCVisualController.py
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-import os
-import tempfile
-import logging
+# UsageController.py
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from typing import List, Optional
+from pydantic import BaseModel
+from datetime import datetime
 from MODEL.database import Database
 from MODEL.Usage import Usage
-from MODEL.Light import Light
-
-# הגדרת לוגר
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/visual",
-    tags=["visualization"],
+    prefix="/usages",
+    tags=["usages"],
 )
 
-@router.get("/ifc/{usage_id}")
-def get_ifc_visualization(usage_id: int):
+
+class UsageResponse(BaseModel):
+    usage_id: int
+    user_id: int
+    usage_date: Optional[datetime] = None
+    floor_plan: Optional[bytes] = None
+    json_file: Optional[str] = None
+
+
+@router.get("/", response_model=List[UsageResponse])
+def get_all_usages(db: Database = Depends(lambda: Database())):
     """
-    מייצר ויזואליזציה של קובץ IFC ומחזיר קובץ HTML
+    קבלת כל השימושים
     """
-    try:
-        # התחברות למסד הנתונים
-        db = Database()
-        usage_dal = Usage(db)
-        light_dal = Light(db)
+    usage_dal = Usage(db)
+    usages = usage_dal.get_all() if hasattr(usage_dal, 'get_all') else []
 
-        # שליפת השימוש
-        usage_data = usage_dal.get_by_id(usage_id)
+    result = []
+    for usage in usages:
+        result.append({
+            "usage_id": usage[0],
+            "user_id": usage[1],
+            "usage_date": usage[2],
+            "floor_plan": None,  # לא מחזירים את הקובץ המלא
+            "json_file": None  # לא מחזירים את ה-JSON המלא
+        })
 
-        if not usage_data:
-            logger.error(f"לא נמצא שימוש עם מזהה {usage_id}")
-            raise HTTPException(status_code=404, detail="שימוש לא נמצא")
-
-        # בדיקה אם יש קובץ IFC
-        if len(usage_data) <= 3 or not usage_data[3]:
-            logger.error(f"אין קובץ IFC בשימוש {usage_id}")
-            raise HTTPException(status_code=404, detail="לא נמצא קובץ IFC בשימוש זה")
-
-        # קבלת נתוני הנורות
-        lights = light_dal.get_by_usage_id(usage_id)
-        if not lights:
-            logger.warning(f"לא נמצאו נורות לשימוש {usage_id}")
-
-        # טיפול בנתוני נורות
-        light_data = []
-        for light in lights:
-            if isinstance(light, tuple) and len(light) > 5:
-                x = float(light[3]) if light[3] is not None else 0
-                y = float(light[4]) if light[4] is not None else 0
-                z = float(light[5]) if light[5] is not None else 0
-                power = float(light[6]) if light[6] is not None else 0
-                light_data.append({
-                    "id": light[0],
-                    "x": x,
-                    "y": y,
-                    "z": z,
-                    "power": power
-                })
-
-        # שמירת הקובץ לקובץ זמני
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ifc") as temp_file:
-            temp_file.write(usage_data[3])
-            ifc_path = temp_file.name
-
-        # יצירת פלט HTML עם מודל תלת-ממדי
-        output_file = os.path.join(tempfile.gettempdir(), f"ifc_visual_{usage_id}.html")
-
-        # כאן קריאה לקוד הויזואליזציה
-        import subprocess
-        result = subprocess.run([
-            "python", "IFCVisualizer.py",
-            "--usage_id", str(usage_id),
-            "--output", output_file
-        ], capture_output=True, text=True)
-
-        if result.returncode != 0:
-            logger.error(f"שגיאה בהפעלת הויזואליזציה: {result.stderr}")
-            raise HTTPException(status_code=500, detail="שגיאה ביצירת הויזואליזציה")
-
-        # ניקוי קובץ IFC זמני
-        try:
-            os.remove(ifc_path)
-        except Exception as e:
-            logger.warning(f"שגיאה בניקוי קובץ זמני: {str(e)}")
-
-        # בדיקה שהקובץ נוצר
-        if not os.path.exists(output_file):
-            logger.error("קובץ הויזואליזציה לא נוצר")
-            raise HTTPException(status_code=500, detail="קובץ הויזואליזציה לא נוצר")
-
-        return FileResponse(
-            path=output_file,
-            filename=f"visualization_{usage_id}.html",
-            media_type="text/html"
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"שגיאה ביצירת ויזואליזציה: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"שגיאה ביצירת ויזואליזציה: {str(e)}")
+    return result
 
 
-@router.get("/dxf/{usage_id}")
-def get_dxf_visualization(usage_id: int):
+@router.get("/{usage_id}", response_model=UsageResponse)
+def get_usage(usage_id: int, db: Database = Depends(lambda: Database())):
     """
-    מייצר ויזואליזציה של קובץ DXF ומחזיר קובץ HTML
+    קבלת שימוש לפי ID
     """
-    try:
-        # התחברות למסד הנתונים
-        db = Database()
-        usage_dal = Usage(db)
-        light_dal = Light(db)
+    usage_dal = Usage(db)
+    usage = usage_dal.get_by_id(usage_id)
 
-        # שליפת השימוש
-        usage_data = usage_dal.get_by_id(usage_id)
+    if not usage:
+        raise HTTPException(status_code=404, detail="שימוש לא נמצא")
 
-        if not usage_data:
-            logger.error(f"לא נמצא שימוש עם מזהה {usage_id}")
-            raise HTTPException(status_code=404, detail="שימוש לא נמצא")
+    return {
+        "usage_id": usage[0],
+        "user_id": usage[1],
+        "usage_date": usage[2],
+        "floor_plan": None,  # לא מחזירים את הקובץ המלא
+        "json_file": None  # לא מחזירים את ה-JSON המלא
+    }
 
-        # בדיקה אם יש קובץ תכנית
-        if len(usage_data) <= 3 or not usage_data[3]:
-            logger.error(f"אין קובץ תכנית בשימוש {usage_id}")
-            raise HTTPException(status_code=404, detail="לא נמצא קובץ תכנית בשימוש זה")
 
-        # קבלת נתוני הנורות
-        lights = light_dal.get_by_usage_id(usage_id)
-        if not lights:
-            logger.warning(f"לא נמצאו נורות לשימוש {usage_id}")
+@router.get("/user/{user_id}", response_model=List[UsageResponse])
+def get_usages_by_user(user_id: int, db: Database = Depends(lambda: Database())):
+    """
+    קבלת שימושים לפי מזהה משתמש
+    """
+    usage_dal = Usage(db)
+    usages = usage_dal.get_by_user_id(user_id)
 
-        # טיפול בנתוני נורות - דומה לקוד הקודם
-        light_data = []
-        for light in lights:
-            if isinstance(light, tuple) and len(light) > 5:
-                light_data.append({
-                    "id": light[0],
-                    "x": float(light[3]) if light[3] is not None else 0,
-                    "y": float(light[4]) if light[4] is not None else 0,
-                    "z": float(light[5]) if light[5] is not None else 0,
-                    "power": float(light[6]) if light[6] is not None else 0
-                })
+    result = []
+    for usage in usages:
+        result.append({
+            "usage_id": usage[0],
+            "user_id": usage[1],
+            "usage_date": usage[2],
+            "floor_plan": None,  # לא מחזירים את הקובץ המלא
+            "json_file": None  # לא מחזירים את ה-JSON המלא
+        })
 
-        # שמירת הקובץ לקובץ זמני
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as temp_file:
-            temp_file.write(usage_data[3])
-            dxf_path = temp_file.name
+    return result
 
-        # יצירת פלט HTML עם מודל תלת-ממדי
-        output_file = os.path.join(tempfile.gettempdir(), f"dxf_visual_{usage_id}.html")
 
-        # כאן קריאה לקוד הויזואליזציה - דומה לקוד הקודם
-        import subprocess
-        result = subprocess.run([
-            "python", "DXFVisualizer.py",
-            "--usage_id", str(usage_id),
-            "--output", output_file
-        ], capture_output=True, text=True)
+@router.get("/{usage_id}/json")
+def get_usage_json(usage_id: int, db: Database = Depends(lambda: Database())):
+    """
+    קבלת תוכן ה-JSON של שימוש
+    """
+    usage_dal = Usage(db)
+    usage = usage_dal.get_by_id(usage_id)
 
-        if result.returncode != 0:
-            logger.error(f"שגיאה בהפעלת הויזואליזציה: {result.stderr}")
-            raise HTTPException(status_code=500, detail="שגיאה ביצירת הויזואליזציה")
+    if not usage or len(usage) <= 4 or not usage[4]:
+        raise HTTPException(status_code=404, detail="JSON לא נמצא")
 
-        # ניקוי קובץ זמני
-        try:
-            os.remove(dxf_path)
-        except Exception as e:
-            logger.warning(f"שגיאה בניקוי קובץ זמני: {str(e)}")
+    return usage[4]  # מחזירים את ה-JSON
 
-        # בדיקה שהקובץ נוצר
-        if not os.path.exists(output_file):
-            logger.error("קובץ הויזואליזציה לא נוצר")
-            raise HTTPException(status_code=500, detail="קובץ הויזואליזציה לא נוצר")
 
-        return FileResponse(
-            path=output_file,
-            filename=f"visualization_{usage_id}.html",
-            media_type="text/html"
-        )
+@router.get("/{usage_id}/floor-plan")
+def get_usage_floor_plan(usage_id: int, db: Database = Depends(lambda: Database())):
+    """
+    קבלת קובץ תוכנית הקומה
+    """
+    from fastapi.responses import Response
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"שגיאה ביצירת ויזואליזציה: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"שגיאה ביצירת ויזואליזציה: {str(e)}")
+    usage_dal = Usage(db)
+    usage = usage_dal.get_by_id(usage_id)
+
+    if not usage or len(usage) <= 3 or not usage[3]:
+        raise HTTPException(status_code=404, detail="תוכנית קומה לא נמצאה")
+
+    return Response(content=usage[3], media_type="application/octet-stream")
+
+
+@router.post("/", response_model=UsageResponse)
+async def create_usage(
+        user_id: int = Form(...),
+        floor_plan: UploadFile = File(None),
+        json_file: str = Form(None)
+):
+    """
+    יצירת שימוש חדש
+    """
+    db = Database()
+    usage_dal = Usage(db)
+
+    floor_plan_data = None
+    if floor_plan:
+        floor_plan_data = await floor_plan.read()
+
+    new_usage = usage_dal.create(
+        user_id=user_id,
+        usage_date=datetime.now(),
+        floor_plan=floor_plan_data,
+        json_file=json_file
+    )
+
+    if not new_usage:
+        raise HTTPException(status_code=500, detail="שגיאה ביצירת שימוש")
+
+    return {
+        "usage_id": new_usage[0],
+        "user_id": user_id,
+        "usage_date": datetime.now(),
+        "floor_plan": None,  # לא מחזירים את הקובץ המלא
+        "json_file": json_file
+    }
+
+
+@router.put("/{usage_id}", response_model=UsageResponse)
+async def update_usage(
+        usage_id: int,
+        user_id: int = Form(None),
+        floor_plan: UploadFile = File(None),
+        json_file: str = Form(None)
+):
+    """
+    עדכון שימוש
+    """
+    db = Database()
+    usage_dal = Usage(db)
+
+    existing_usage = usage_dal.get_by_id(usage_id)
+    if not existing_usage:
+        raise HTTPException(status_code=404, detail="שימוש לא נמצא")
+
+    floor_plan_data = None
+    if floor_plan:
+        floor_plan_data = await floor_plan.read()
+
+    success = usage_dal.update(
+        usage_id=usage_id,
+        user_id=user_id,
+        floor_plan=floor_plan_data,
+        json_file=json_file
+    )
+
+    if not success:
+        raise HTTPException(status_code=500, detail="שגיאה בעדכון שימוש")
+
+    updated_usage = usage_dal.get_by_id(usage_id)
+
+    return {
+        "usage_id": updated_usage[0],
+        "user_id": updated_usage[1],
+        "usage_date": updated_usage[2],
+        "floor_plan": None,
+        "json_file": None
+    }
+
+
+@router.delete("/{usage_id}", status_code=204)
+def delete_usage(usage_id: int, db: Database = Depends(lambda: Database())):
+    """
+    מחיקת שימוש
+    """
+    usage_dal = Usage(db)
+
+    existing_usage = usage_dal.get_by_id(usage_id)
+    if not existing_usage:
+        raise HTTPException(status_code=404, detail="שימוש לא נמצא")
+
+    success = usage_dal.delete(usage_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="שגיאה במחיקת שימוש")
+
+    return None

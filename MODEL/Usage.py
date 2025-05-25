@@ -59,3 +59,10 @@ class Usage:
         WHERE user_id = %s
         """
         return self.db.fetch_query(query, (user_id,))
+
+    def get_all(self):
+        query = """
+        SELECT usage_id, user_id, usage_date, floor_plan, json_file
+        FROM `usage`
+        """
+        return self.db.fetch_query(query)
