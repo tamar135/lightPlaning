@@ -16,11 +16,12 @@ class Vertex:
         self.point = point
 
 class LightVertex(Vertex):
-    def __init__(self, point: Point3D, lux: float, lumens: float, target_id=None):
+    def __init__(self, point: Point3D, lux: float, lumens: float, target_id=None, light_type="center"):
         super().__init__(point)
         self.lux = lux
         self.lumens = lumens
         self.target_id = target_id
+        self.light_type = light_type  # "center" או "furniture"
 
 class ObstanceVertex(Vertex):
     def __init__(self, element_id, point: Point3D, reflection_factor: float, required_lux: float):
