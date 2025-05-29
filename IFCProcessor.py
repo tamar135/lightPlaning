@@ -4,6 +4,7 @@ import json
 import tempfile
 import logging
 import os
+import math
 from math import sqrt
 import numpy as np
 
@@ -18,17 +19,10 @@ GEOMETRY_SETTINGS = ifcopenshell.geom.settings()
 GEOMETRY_SETTINGS.set(GEOMETRY_SETTINGS.USE_WORLD_COORDS, True)
 
 
-
 def process_ifc_file(file_path: str, room_type: str) -> str:
     """
     מעבד קובץ IFC ומייצר קובץ JSON עם כל המידע הרלוונטי
-
-    Args:
-        file_path: נתיב לקובץ ה-IFC
-        room_type: סוג החדר
-
-    Returns:
-        str: נתיב לקובץ ה-JSON המיוצר
+    כולל חילוץ חדרים נפרדים מתוך IfcSpace
     """
     logger.debug("מעבד קובץ IFC: %s", file_path)
 
@@ -39,54 +33,38 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
         logger.error("שגיאה בטעינת קובץ IFC: %s", str(e))
         raise
 
-    room_info = extract_room_info(model)
-    if not room_type:
-        room_type = room_info.get("RoomType", RoomType.UNKNOWN.room_name)
+    # חילוץ חדרים מ-IfcSpace
+    rooms_data = extract_rooms_from_spaces(model)
 
-    # קביעת עוצמת תאורה מומלצת לפי סוג החדר
-    room_type_enum = RoomType.get_by_name(room_type)
-    recommended_lux = room_type_enum.recommended_lux
-    logger.debug("זוהה חדר מסוג %s עם תאורה מומלצת %d לוקס",
-                 room_type, recommended_lux)
+    # אם אין חדרים ב-IFC, צור חדר ברירת מחדל
+    if not rooms_data:
+        room_info = extract_room_info(model)
+        if not room_type:
+            room_type = room_info.get("RoomType", RoomType.UNKNOWN.room_name)
 
-    results = [
-        {"RecommendedLux": recommended_lux},
-        {"RoomType": room_type},
-        {"RoomHeight": room_info.get("RoomHeight", 2.5)},
-        {"RoomArea": room_info.get("RoomArea", 20.0)}
-    ]
+        rooms_data = [{
+            "RoomId": "default_room",
+            "RoomName": room_type,
+            "RoomType": room_type,
+            "RoomHeight": room_info.get("RoomHeight", 2.5),
+            "RoomArea": room_info.get("RoomArea", 20.0),
+            "RecommendedLux": RoomType.get_by_name(room_type).recommended_lux,
+            "CenterX": 0,
+            "CenterY": 0,
+            "CenterZ": room_info.get("RoomHeight", 2.5) - 0.5
+        }]
 
-    elements_by_type = {
-        "walls": ["IfcWall", "IfcWallStandardCase"],
-        "windows": ["IfcWindow", "IfcWindowStandardCase"],
-        "doors": ["IfcDoor", "IfcDoorStandardCase"],
-        "slabs": ["IfcSlab"],
-        "furniture": ["IfcFurnishingElement"],
-        "fixtures": ["IfcFlowTerminal"],
-        "space": ["IfcSpace"]
-    }
+    # חילוץ אלמנטים עם קישור לחדרים
+    elements_data = extract_elements_with_room_assignment(model, rooms_data)
 
-    elements_data = []
-    logger.debug("מתחיל לחלץ אלמנטים מהמודל")
+    # בניית המבנה הסופי
+    results = []
 
-    for category, ifc_types in elements_by_type.items():
-        logger.debug("מחלץ אלמנטים מסוג %s", category)
+    # הוספת החדרים
+    for room in rooms_data:
+        results.append({"Room": room})
 
-        for ifc_type in ifc_types:
-            try:
-                elements = model.by_type(ifc_type)
-                logger.debug("נמצאו %d אלמנטים מסוג %s", len(elements), ifc_type)
-
-                for element in elements:
-                    try:
-                        element_data = extract_element_data(element, model, category)
-                        if element_data:
-                            elements_data.append(element_data)
-                    except Exception as e:
-                        logger.warning("שגיאה בחילוץ נתוני אלמנט: %s", str(e))
-            except Exception as e:
-                logger.warning("שגיאה בטעינת אלמנטים מסוג %s: %s", ifc_type, str(e))
-
+    # הוספת האלמנטים
     results.extend(elements_data)
 
     # שמירה לקובץ JSON זמני
@@ -99,6 +77,193 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
     except Exception as e:
         logger.error("שגיאה בשמירת קובץ JSON: %s", str(e))
         raise
+
+
+def extract_rooms_from_spaces(model):
+    """חילוץ חדרים מתוך IfcSpace"""
+    rooms = []
+
+    try:
+        spaces = model.by_type("IfcSpace")
+        logger.debug(f"נמצאו {len(spaces)} חדרים (IfcSpace)")
+
+        for i, space in enumerate(spaces):
+            try:
+                # פרטי החדר
+                room_id = getattr(space, 'GlobalId', f'room_{i}')
+                room_name = getattr(space, 'Name', f'Room {i + 1}') or f'Room {i + 1}'
+                room_long_name = getattr(space, 'LongName', '') or ''
+
+                # זיהוי סוג החדר
+                room_type = identify_room_type_from_name(room_name, room_long_name)
+
+                # חילוץ מיקום ומידות
+                location_data = extract_space_geometry(space)
+
+                # חישוב תאורה מומלצת
+                room_type_enum = RoomType.get_by_name(room_type)
+                recommended_lux = room_type_enum.recommended_lux
+
+                room_data = {
+                    "RoomId": room_id,
+                    "RoomName": room_name,
+                    "RoomType": room_type,
+                    "RoomHeight": location_data.get("Height", 2.5),
+                    "RoomArea": location_data.get("Area", 20.0),
+                    "RecommendedLux": recommended_lux,
+                    "CenterX": location_data.get("CenterX", 0),
+                    "CenterY": location_data.get("CenterY", 0),
+                    "CenterZ": location_data.get("Height", 2.5) - 0.5
+                }
+
+                rooms.append(room_data)
+                logger.debug(
+                    f"חדר {i + 1}: {room_name} ({room_type}) - מרכז: ({location_data.get('CenterX', 0):.1f}, {location_data.get('CenterY', 0):.1f})")
+
+            except Exception as e:
+                logger.warning(f"שגיאה בעיבוד חדר {i}: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"שגיאה בחילוץ חדרים: {str(e)}")
+
+    return rooms
+
+
+def identify_room_type_from_name(room_name, room_long_name=""):
+    """זיהוי סוג החדר מהשם"""
+    name_combined = f"{room_name} {room_long_name}".lower()
+
+    room_types = {
+        "bedroom": ["bedroom", "חדר שינה", "שינה", "bed", "sleeping", "dormitory"],
+        "living": ["living", "סלון", "מגורים", "lounge", "family", "sitting"],
+        "kitchen": ["kitchen", "מטבח", "cook", "dining", "אוכל"],
+        "bathroom": ["bathroom", "שירותים", "אמבטיה", "מקלחת", "bath", "toilet", "shower", "wc"],
+        "office": ["office", "משרד", "study", "עבודה", "work", "desk"]
+    }
+
+    for room_type, keywords in room_types.items():
+        if any(keyword in name_combined for keyword in keywords):
+            return room_type
+
+    return "bedroom"  # ברירת מחדל
+
+
+def extract_space_geometry(space):
+    """חילוץ גיאומטריה של חדר (IfcSpace)"""
+    location_data = {
+        "CenterX": 0,
+        "CenterY": 0,
+        "Height": 2.5,
+        "Area": 20.0
+    }
+
+    try:
+        # ניסיון לחילוץ גיאומטריה
+        geom = ifcopenshell.geom.create_shape(GEOMETRY_SETTINGS, space)
+
+        if geom and geom.geometry:
+            verts = geom.geometry.verts
+            if len(verts) >= 3:
+                points = [(verts[i], verts[i + 1], verts[i + 2])
+                          for i in range(0, len(verts), 3)]
+
+                if points:
+                    x_coords = [p[0] for p in points]
+                    y_coords = [p[1] for p in points]
+                    z_coords = [p[2] for p in points]
+
+                    location_data["CenterX"] = (min(x_coords) + max(x_coords)) / 2
+                    location_data["CenterY"] = (min(y_coords) + max(y_coords)) / 2
+                    location_data["Height"] = max(z_coords) - min(z_coords)
+                    location_data["Area"] = (max(x_coords) - min(x_coords)) * (max(y_coords) - min(y_coords))
+
+                    return location_data
+
+    except Exception as e:
+        logger.debug(f"לא ניתן לחלץ גיאומטריה לחדר: {str(e)}")
+
+    # ניסיון חילוץ מתכונות
+    try:
+        psets = get_element_properties(space)
+        for prop_set_name, props in psets.items():
+            if "Area" in props:
+                location_data["Area"] = float(props["Area"])
+            if "Height" in props:
+                location_data["Height"] = float(props["Height"])
+    except Exception as e:
+        logger.debug(f"לא ניתן לחלץ תכונות חדר: {str(e)}")
+
+    return location_data
+
+
+def extract_elements_with_room_assignment(model, rooms_data):
+    """חילוץ אלמנטים עם הקצאה לחדרים"""
+    elements_by_type = {
+        "walls": ["IfcWall", "IfcWallStandardCase"],
+        "windows": ["IfcWindow", "IfcWindowStandardCase"],
+        "doors": ["IfcDoor", "IfcDoorStandardCase"],
+        "slabs": ["IfcSlab"],
+        "furniture": ["IfcFurnishingElement"],
+        "fixtures": ["IfcFlowTerminal"]
+    }
+
+    elements_data = []
+
+    # מיפוי חדרים לפי מיקום (אם אין קישור ישיר)
+    room_centers = [(room["CenterX"], room["CenterY"], room["RoomId"])
+                    for room in rooms_data]
+
+    for category, ifc_types in elements_by_type.items():
+        for ifc_type in ifc_types:
+            try:
+                elements = model.by_type(ifc_type)
+                logger.debug(f"מעבד {len(elements)} אלמנטים מסוג {ifc_type}")
+
+                for element in elements:
+                    try:
+                        element_data = extract_element_data(element, model, category)
+                        if element_data:
+                            # הקצאת החדר לאלמנט
+                            room_id = assign_element_to_room(element, element_data, room_centers, model)
+                            element_data["RoomId"] = room_id
+
+                            elements_data.append(element_data)
+                    except Exception as e:
+                        logger.warning(f"שגיאה בחילוץ אלמנט: {str(e)}")
+
+            except Exception as e:
+                logger.warning(f"שגיאה בטעינת אלמנטים מסוג {ifc_type}: {str(e)}")
+
+    return elements_data
+
+
+def assign_element_to_room(element, element_data, room_centers, model):
+    """הקצאת אלמנט לחדר הקרוב ביותר"""
+    try:
+        # ניסיון מציאת קישור ישיר דרך IfcRelContainedInSpatialStructure
+        if hasattr(element, 'ContainedInStructure'):
+            for rel in element.ContainedInStructure:
+                if rel.is_a('IfcRelContainedInSpatialStructure'):
+                    relating_structure = rel.RelatingStructure
+                    if relating_structure.is_a('IfcSpace'):
+                        return getattr(relating_structure, 'GlobalId', 'default_room')
+
+        # אם אין קישור ישיר - מצא חדר לפי מיקום
+        element_x = element_data.get("X", 0)
+        element_y = element_data.get("Y", 0)
+
+        if not room_centers:
+            return "default_room"
+
+        # מצא החדר הקרוב ביותר
+        closest_room = min(room_centers,
+                           key=lambda room: math.sqrt((room[0] - element_x) ** 2 + (room[1] - element_y) ** 2))
+
+        return closest_room[2]  # room_id
+
+    except Exception as e:
+        logger.debug(f"לא ניתן להקצות אלמנט לחדר: {str(e)}")
+        return room_centers[0][2] if room_centers else "default_room"
 
 
 def extract_geometry_coordinates(element):

@@ -22,6 +22,7 @@ class LightVertex(Vertex):
         self.lumens = lumens
         self.target_id = target_id
         self.light_type = light_type  # "center" או "furniture"
+        # room_id יתווסף דינמית בהמשך
 
 class ObstanceVertex(Vertex):
     def __init__(self, element_id, point: Point3D, reflection_factor: float, required_lux: float):
@@ -29,6 +30,7 @@ class ObstanceVertex(Vertex):
         self.element_id = element_id if element_id is not None else 0
         self.reflection_factor = reflection_factor
         self.required_lux = required_lux
+        # room_id יתווסף דינמית בהמשך
 
 class Edge:
     def __init__(self, start: int, end: int, weight: float, length: float):

@@ -1,5 +1,35 @@
-fastapi
-uvicorn
-ifcopenshell
-networkx
-python-multipart
+# FastAPI ותלויות בסיסיות
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+aiofiles==23.2.1
+
+# מסדי נתונים
+mysql-connector-python==8.2.0
+PyMySQL==1.1.0
+
+# אימות וביטחון
+bcrypt==4.1.2
+PyJWT==2.8.0
+python-jose[cryptography]==3.3.0
+
+# עיבוד קבצי IFC
+ifcopenshell==0.7.0
+
+# למידת מכונה וCNN
+tensorflow==2.15.0
+numpy==1.24.3
+Pillow==10.1.0
+opencv-python==4.8.1.78
+
+# YOLO לזיהוי אובייקטים
+ultralytics==8.0.196
+
+# ויזואליזציה
+matplotlib==3.8.2
+plotly==5.17.0
+
+# שירותיים
+python-dotenv==1.0.0
+logging==0.4.9.6
+pathlib2==2.3.7
