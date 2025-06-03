@@ -1,8 +1,10 @@
-# ShadowOptimizer.py - תיקון לטיפול בחדרים נפרדים
+# ShadowOptimizer.py - גרסה מלאה עם חוקי פיזיקה מדויקים ובדיקת כל הצמתים
 import math
 import logging
 from typing import List, Tuple, Dict
 from models import Point3D, LightVertex, ObstanceVertex, Graph
+from MaterialReflection import MaterialReflection
+from RoomType import RoomType
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -17,181 +19,102 @@ class ShadowOptimizer:
         self.obstacles = self.get_obstacles()
         self.reflection_surfaces = self.get_reflection_surfaces()
 
-        # פרמטרי פיזיקה
+        # פרמטרי פיזיקה מדויקים
         self.light_efficiency = 80  # לומן לוואט עבור LED
-        self.cos_angle_threshold = 0.1  # זווית מקסימלית לאור ישיר
+        self.cos_angle_threshold = 0.1
+        self.min_distance = 0.1  # מרחק מינימלי למניעת חלוקה באפס
 
-        # **מידע על חדרים - חדש!**
-        self.rooms_info = {}
-        self.elements_by_room = {}
+        # מקדמי שבירה לחוק סנל
+        self.refractive_indices = {
+            'air': 1.0,
+            'glass': 1.52,
+            'water': 1.33,
+            'plastic': 1.4,
+            'default': 1.0
+        }
 
-    def set_rooms_info(self, rooms_info: Dict, elements_by_room: Dict):
-        """הגדרת מידע על החדרים והאלמנטים בכל חדר"""
-        self.rooms_info = rooms_info
-        self.elements_by_room = elements_by_room
-        logger.debug(f"🏠 הוגדר מידע על {len(rooms_info)} חדרים")
+        #  חישוב תאורה לכל הצמתים מראש
+        self.calculate_accurate_illumination_for_all_vertices()
 
-    def optimize_lighting_by_rooms(self) -> List[LightVertex]:
-        """אופטימיזציה נפרדת לכל חדר - פונקציה חדשה מהותית!"""
-        logger.debug("🔬 מתחיל אופטימיזציה מבוססת חדרים נפרדים")
+    def calculate_accurate_illumination_for_all_vertices(self):
+        """ חישוב מדויק של תאורה לכל צומת בגרף"""
+        logger.debug(" מחשב תאורה מדויקת לכל צומת")
 
-        optimized_lights = []
+        for vertex in self.graph.vertices:
+            if isinstance(vertex, ObstanceVertex):
+                # חישוב עוצמת תאורה פיזיקלית בפועל
+                vertex.actual_lux = self.calculate_physics_based_lux_for_vertex(vertex)
 
-        # קיבוץ מנורות מרכזיות לפי חדרים
-        lights_by_room = self.group_lights_by_room()
+                # קביעת עוצמה נדרשת לפי סוג האלמנט
+                vertex.required_lux = self.get_required_lux_by_element_type(vertex)
 
-        logger.debug(f"🏠 נמצאו מנורות ב-{len(lights_by_room)} חדרים")
+                # עדכון מקדם החזרה לפי החומר
+                self.update_material_reflection_factor(vertex)
 
-        # אופטימיזציה לכל חדר בנפרד
-        for room_id, room_lights in lights_by_room.items():
-            logger.debug(f"\n🏠 מאפטם חדר {room_id} עם {len(room_lights)} מנורות מרכזיות")
+                logger.debug(f"צומת ({vertex.point.x:.1f},{vertex.point.y:.1f}): "
+                             f"בפועל={vertex.actual_lux:.1f}, נדרש={vertex.required_lux:.1f}")
 
-            # מידע על החדר הנוכחי
-            room_info = self.rooms_info.get(room_id, {})
-            room_type = room_info.get("RoomType", "bedroom")
-            recommended_lux = room_info.get("RecommendedLux", self.required_lux)
+    def calculate_physics_based_lux_for_vertex(self, vertex: ObstanceVertex) -> float:
+        """💡 חישוב עוצמת תאורה פיזיקלית מדויקת לצומת"""
+        total_lux = 0
 
-            # מציאת אלמנטים בחדר הזה
-            room_elements = self.get_elements_for_room(room_id)
-            room_obstacles = self.get_obstacles_for_room(room_id)
+        # אור ישיר מכל מנורה
+        for light in self.center_lights + self.furniture_lights:
+            direct_lux = self.calculate_direct_illumination(light, vertex.point)
+            total_lux += direct_lux
 
-            # אופטימיזציה עבור כל מנורה מרכזית בחדר
-            for center_light in room_lights:
-                logger.debug(f"   🔍 מאפטם מנורה מרכזית בחדר {room_id}")
+        # אור מוחזר ממשטחים
+        for light in self.center_lights + self.furniture_lights:
+            reflected_lux = self.calculate_reflected_illumination(light, vertex.point)
+            total_lux += reflected_lux
 
-                # מציאת נקודות קריטיות בחדר הזה בלבד
-                room_critical_points = self.find_room_critical_points_for_room(center_light, room_elements,
-                                                                               room_obstacles)
+        return total_lux
 
-                # הגדרת גבולות החדר
-                room_bounds = self.calculate_room_bounds_for_room(room_info, room_elements)
+    def get_required_lux_by_element_type(self, vertex: ObstanceVertex) -> float:
+        """ קביעת עוצמת תאורה נדרשת לפי סוג האלמנט"""
+        element_type = getattr(vertex, 'element_type', '').lower()
 
-                # אופטימיזציה של המנורה המרכזית
-                best_lights_for_room = self.optimize_center_light_with_physics_for_room(
-                    center_light, room_critical_points, room_bounds, recommended_lux, room_id
-                )
+        if 'desk' in element_type or 'workbench' in element_type:
+            return 500  # שולחן עבודה
+        elif 'counter' in element_type:
+            return 400  # דלפק
+        elif 'table' in element_type:
+            return 300  # שולחן רגיל
+        elif 'sofa' in element_type or 'chair' in element_type:
+            return 200  # ישיבה
+        else:
+            return self.required_lux  # ברירת מחדל
 
-                optimized_lights.extend(best_lights_for_room)
-                logger.debug(f"   ✅ חדר {room_id}: {len(best_lights_for_room)} מנורות מאופטמות")
+    def update_material_reflection_factor(self, vertex: ObstanceVertex):
+        """🧱 עדכון מקדם החזרה לפי החומר האמיתי"""
+        material_name = getattr(vertex, 'material', 'unknown')
+        material_reflection = MaterialReflection.get_by_material_name(material_name)
+        vertex.reflection_factor = material_reflection.reflection_factor
 
-        # הוספת מנורות ריהוט (נשמרות כמות שהן)
-        furniture_lights_with_room = self.get_furniture_lights_with_room_id()
-        optimized_lights.extend(furniture_lights_with_room)
+        logger.debug(f"חומר '{material_name}' -> מקדם החזרה: {vertex.reflection_factor}")
 
-        logger.debug(f"\n🎯 סיום אופטימיזציה לפי חדרים: {len(optimized_lights)} מנורות כולל ריהוט")
-        return optimized_lights
+    def optimize_lighting_room(self) -> List[LightVertex]:
+        """אופטימיזציה מדויקת לחדר לפי חוקי הפיזיקה"""
+        logger.debug("מתחיל אופטימיזציה מבוססת פיזיקה לחדר")
 
-    def group_lights_by_room(self) -> Dict[str, List[LightVertex]]:
-        """קיבוץ מנורות מרכזיות לפי חדרים"""
-        lights_by_room = {}
+        # קבלת מנורות מרכזיות קיימות
+        center_lights = self.get_center_lights()
+        if not center_lights:
+            logger.warning("לא נמצאו מנורות מרכזיות קיימות")
+            return []
 
-        for light in self.center_lights:
-            room_id = getattr(light, 'room_id', 'default_room')
-            if room_id not in lights_by_room:
-                lights_by_room[room_id] = []
-            lights_by_room[room_id].append(light)
+        current_center = center_lights[0]
+        furniture_obstacles = self.get_furniture_obstacles()
 
-        return lights_by_room
+        # חילוץ מידע החדר מהגרף
+        room_area, ceiling_height = self.extract_room_info_from_graph()
 
-    def get_elements_for_room(self, room_id: str) -> List[dict]:
-        """מציאת אלמנטים השייכים לחדר ספציפי"""
-        return self.elements_by_room.get(room_id, [])
-
-    def get_obstacles_for_room(self, room_id: str) -> List[ObstanceVertex]:
-        """מציאת מכשולים השייכים לחדר ספציפי"""
-        room_obstacles = []
-        for obstacle in self.obstacles:
-            obstacle_room_id = getattr(obstacle, 'room_id', 'default_room')
-            if obstacle_room_id == room_id:
-                room_obstacles.append(obstacle)
-        return room_obstacles
-
-    def get_furniture_lights_with_room_id(self) -> List[LightVertex]:
-        """מציאת מנורות ריהוט עם room_id"""
-        furniture_lights = []
-        for light in self.furniture_lights:
-            # ודא שלמנורת הריהוט יש room_id
-            if not hasattr(light, 'room_id'):
-                light.room_id = 'default_room'
-            furniture_lights.append(light)
-        return furniture_lights
-
-    def find_room_critical_points_for_room(self, center_light: LightVertex, room_elements: List[dict],
-                                           room_obstacles: List[ObstanceVertex]) -> List[Point3D]:
-        """מציאת נקודות קריטיות בחדר ספציפי בלבד"""
-        critical_points = []
-
-        # נקודות מריהוט בחדר הזה
-        for obstacle in room_obstacles:
-            required_lux = getattr(obstacle, 'required_lux', 0)
-            if required_lux > 0:
-                critical_points.append(obstacle.point)
-                critical_points.extend(self.generate_points_around_furniture(obstacle))
-
-        # אם אין ריהוט, צור רשת נקודות קטנה בחדר
-        if not critical_points:
-            critical_points = self.generate_room_grid_small(center_light.point, 3.0)
-
-        logger.debug(f"     נמצאו {len(critical_points)} נקודות קריטיות בחדר")
-        return critical_points
-
-    def calculate_room_bounds_for_room(self, room_info: dict, room_elements: List[dict]) -> dict:
-        """חישוב גבולות החדר הספציפי"""
-        # אם יש מידע מפורש על החדר
-        if room_info:
-            center_x = room_info.get("CenterX", 0)
-            center_y = room_info.get("CenterY", 0)
-
-            # הערכת גודל החדר מהשטח
-            area = room_info.get("RoomArea", 20)
-            estimated_side = math.sqrt(area)
-
-            return {
-                'min_x': center_x - estimated_side / 2,
-                'max_x': center_x + estimated_side / 2,
-                'min_y': center_y - estimated_side / 2,
-                'max_y': center_y + estimated_side / 2
-            }
-
-        # אחרת, חשב מהאלמנטים
-        if room_elements:
-            all_x = []
-            all_y = []
-
-            for element in room_elements:
-                x = element.get("X", 0)
-                y = element.get("Y", 0)
-                width = element.get("Width", 0)
-                length = element.get("Length", 0)
-
-                all_x.extend([x, x + width])
-                all_y.extend([y, y + length])
-
-            if all_x and all_y:
-                margin = 0.3
-                return {
-                    'min_x': min(all_x) + margin,
-                    'max_x': max(all_x) - margin,
-                    'min_y': min(all_y) + margin,
-                    'max_y': max(all_y) - margin
-                }
-
-        # ברירת מחדל
-        return {'min_x': -2, 'max_x': 2, 'min_y': -2, 'max_y': 2}
-
-    def optimize_center_light_with_physics_for_room(self, original_light: LightVertex, critical_points: List[Point3D],
-                                                    room_bounds: dict, recommended_lux: float, room_id: str) -> List[
-        LightVertex]:
-        """אופטימיזציה של מנורה מרכזית עבור חדר ספציפי"""
-        center = original_light.point
-        ceiling_height = center.z + 0.3
-
-        # 4 תצורות למנורות מרכזיות
+        # 4 תצורות מנורות שונות
         configurations = [
-            ("מנורה מרכזית אחת", self.config_single_center(center, ceiling_height, room_bounds, room_id)),
-            ("2 מנורות מרכזיות", self.config_dual_linear(center, ceiling_height, room_bounds, room_id)),
-            ("3 מנורות מרכזיות", self.config_triangle(center, ceiling_height, room_bounds, room_id)),
-            ("4 מנורות מרכזיות", self.config_square(center, ceiling_height, room_bounds, room_id))
+            ("מנורה מרכזית אחת", self.config_single_simple(current_center.point, ceiling_height)),
+            ("2 מנורות", self.config_dual_simple(current_center.point, ceiling_height, room_area)),
+            ("משולש 3 מנורות", self.config_triangle_simple(current_center.point, ceiling_height, room_area)),
+            ("ריבוע 4 מנורות", self.config_square_simple(current_center.point, ceiling_height, room_area))
         ]
 
         best_lights = None
@@ -201,441 +124,533 @@ class ShadowOptimizer:
         for name, config in configurations:
             lights = config['lights']
 
-            # חישוב ציון פיזיקלי - משלב צל + עוצמת תאורה
-            physics_score = self.calculate_combined_physics_score_for_room(lights, critical_points, room_id)
+            # חישוב ציון צללים ווקטוריאלי
+            shadow_score = self.calculate_vectorial_shadow_score(lights, furniture_obstacles, room_area)
+
+            # חישוב ציון תאורה פיזיקלי מדויק - כל הצמתים
+            illumination_score = self.calculate_physics_illumination_score_all_vertices(lights)
             aesthetic_score = config['aesthetic_score']
 
-            # ציון משולב: פיזיקה (85%) + אסתטיקה (15%)
-            total_score = physics_score * 0.85 + aesthetic_score * 0.15
+            # 70% תאורה פיזיקלית, 20% צללים, 10% אסתטיקה
+            total_score = illumination_score * 0.7 + shadow_score * 0.2 + aesthetic_score * 0.1
 
-            logger.debug(
-                f"     {name} (חדר {room_id}): פיזיקה={physics_score:.2f}, אסתטיקה={aesthetic_score:.2f}, ציון={total_score:.2f}")
+            logger.debug(f"        {name}: תאורה={illumination_score:.2f}, צללים={shadow_score:.2f}, "
+                         f"אסתטיקה={aesthetic_score:.2f} סה\"כ={total_score:.2f}")
 
             if total_score < best_score:
                 best_score = total_score
                 best_lights = lights
                 best_name = name
 
-        logger.debug(f"   🏆 נבחר לחדר {room_id}: {best_name}")
-        return best_lights if best_lights else [original_light]
+        logger.debug(f" נבחר: {best_name} עם ציון {best_score:.2f}")
 
-    def calculate_combined_physics_score_for_room(self, lights: List[LightVertex], critical_points: List[Point3D],
-                                                  room_id: str) -> float:
-        """חישוב ציון פיזיקלי משולב עבור חדר ספציפי"""
-        # ציון תאורה
-        illumination_score = self.calculate_illumination_adequacy_score(lights, critical_points)
+        # הוספת מנורות ריהוט + מנורות מרכזיות המאופטמות
+        furniture_lights = self.get_furniture_lights()
+        result = best_lights + furniture_lights
+        return result
 
-        # ציון צללים - רק מריהוט בחדר הזה
-        room_furniture = self.get_furniture_for_room(room_id)
-        shadow_score = self.calculate_shadow_score_for_room(lights, room_furniture)
+    def calculate_physics_illumination_score_all_vertices(self, lights: List[LightVertex]) -> float:
+        """🔬 ציון פיזיקלי מבוסס על כל הצמתים בגרף"""
+        total_error = 0.0
+        point_count = 0
 
-        # ציון מרחק מנורות - רק ממנורות ריהוט בחדר הזה
-        room_furniture_lights = [light for light in self.furniture_lights if
-                                 getattr(light, 'room_id', 'default_room') == room_id]
-        distance_penalty = self.calculate_light_proximity_penalty_for_room(lights, room_furniture_lights)
-
-        # משקל יחסי
-        combined_score = illumination_score * 0.6 + shadow_score * 0.25 + distance_penalty * 0.15
-
-        return combined_score
-
-    def get_furniture_for_room(self, room_id: str) -> List[ObstanceVertex]:
-        """מציאת ריהוט עבור חדר ספציפי"""
-        room_furniture = []
-        for obstacle in self.obstacles:
-            obstacle_room_id = getattr(obstacle, 'room_id', 'default_room')
-            if obstacle_room_id == room_id and getattr(obstacle, 'required_lux', 0) > 0:
-                room_furniture.append(obstacle)
-        return room_furniture
-
-    def calculate_shadow_score_for_room(self, lights: List[LightVertex], room_furniture: List[ObstanceVertex]) -> float:
-        """חישוב ציון צללים עבור חדר ספציפי"""
-        if not room_furniture:
-            return 0
-
-        shadow_area = self.calculate_vectorial_shadow_area(lights, room_furniture)
-        room_area = 25.0  # הנחה לשטח חדר ממוצע
-        normalized_shadow_score = min(shadow_area / room_area, 1.0)
-
-        return normalized_shadow_score
-
-    def calculate_light_proximity_penalty_for_room(self, center_lights: List[LightVertex],
-                                                   room_furniture_lights: List[LightVertex]) -> float:
-        """חישוב עונש על מנורות מרכזיות קרובות מידי למנורות ריהוט באותו חדר"""
-        if not center_lights or not room_furniture_lights:
-            return 0
-
-        min_aesthetic_distance = 1.0
-        total_penalty = 0
-        violations = 0
-
-        for center_light in center_lights:
-            if getattr(center_light, 'light_type', 'center') == "center":
-                for furniture_light in room_furniture_lights:
-                    distance = self.calculate_distance(center_light.point, furniture_light.point)
-
-                    if distance < min_aesthetic_distance:
-                        penalty = ((min_aesthetic_distance - distance) / min_aesthetic_distance) ** 2
-                        total_penalty += penalty
-                        violations += 1
-
-        avg_penalty = total_penalty / max(len(center_lights) * len(room_furniture_lights), 1)
-        return avg_penalty
-
-    # **תצורות תאורה מעודכנות עם room_id**
-    def config_single_center(self, center: Point3D, ceiling_height: float, room_bounds: dict, room_id: str):
-        """מנורה אחת במרכז החדר"""
-        safe_x = max(room_bounds['min_x'], min(room_bounds['max_x'], center.x))
-        safe_y = max(room_bounds['min_y'], min(room_bounds['max_y'], center.y))
-
-        light = LightVertex(
-            Point3D(safe_x, safe_y, ceiling_height - 0.3),
-            lux=400,
-            lumens=12000,
-            target_id=None,
-            light_type="center"
-        )
-        light.room_id = room_id  # **הוספת room_id**
-
-        return {
-            'lights': [light],
-            'aesthetic_score': 1.0
-        }
-
-    def config_dual_linear(self, center: Point3D, ceiling_height: float, room_bounds: dict, room_id: str):
-        """2 מנורות בקו"""
-        offset = 1.5
-
-        x1 = max(room_bounds['min_x'], min(room_bounds['max_x'], center.x - offset))
-        x2 = max(room_bounds['min_x'], min(room_bounds['max_x'], center.x + offset))
-        safe_y = max(room_bounds['min_y'], min(room_bounds['max_y'], center.y))
-
-        lights = []
-        for x in [x1, x2]:
-            light = LightVertex(
-                Point3D(x, safe_y, ceiling_height - 0.3),
-                lux=250,
-                lumens=7000,
-                target_id=None,
-                light_type="center"
-            )
-            light.room_id = room_id  # **הוספת room_id**
-            lights.append(light)
-
-        return {
-            'lights': lights,
-            'aesthetic_score': 0.8
-        }
-
-    def config_triangle(self, center: Point3D, ceiling_height: float, room_bounds: dict, room_id: str):
-        """3 מנורות במשולש"""
-        radius = min(1.2,
-                     (room_bounds['max_x'] - room_bounds['min_x']) / 3,
-                     (room_bounds['max_y'] - room_bounds['min_y']) / 3)
-        angles = [0, 2 * math.pi / 3, 4 * math.pi / 3]
-
-        lights = []
-        for angle in angles:
-            x = center.x + radius * math.cos(angle)
-            y = center.y + radius * math.sin(angle)
-
-            safe_x = max(room_bounds['min_x'], min(room_bounds['max_x'], x))
-            safe_y = max(room_bounds['min_y'], min(room_bounds['max_y'], y))
-
-            light = LightVertex(
-                Point3D(safe_x, safe_y, ceiling_height - 0.3),
-                lux=200,
-                lumens=5000,
-                target_id=None,
-                light_type="center"
-            )
-            light.room_id = room_id  # **הוספת room_id**
-            lights.append(light)
-
-        return {
-            'lights': lights,
-            'aesthetic_score': 0.9
-        }
-
-    def config_square(self, center: Point3D, ceiling_height: float, room_bounds: dict, room_id: str):
-        """4 מנורות בריבוע"""
-        offset = min(1.0,
-                     (room_bounds['max_x'] - room_bounds['min_x']) / 4,
-                     (room_bounds['max_y'] - room_bounds['min_y']) / 4)
-        positions = [
-            (-offset, -offset), (offset, -offset),
-            (offset, offset), (-offset, offset)
-        ]
-
-        lights = []
-        for dx, dy in positions:
-            x = center.x + dx
-            y = center.y + dy
-
-            safe_x = max(room_bounds['min_x'], min(room_bounds['max_x'], x))
-            safe_y = max(room_bounds['min_y'], min(room_bounds['max_y'], y))
-
-            light = LightVertex(
-                Point3D(safe_x, safe_y, ceiling_height - 0.3),
-                lux=150,
-                lumens=4000,
-                target_id=None,
-                light_type="center"
-            )
-            light.room_id = room_id  # **הוספת room_id**
-            lights.append(light)
-
-        return {
-            'lights': lights,
-            'aesthetic_score': 0.95
-        }
-
-    # **שאר הפונקציות נשארות זהות - רק עודכנו לטיפול בחדרים נפרדים**
-
-    def get_center_lights(self) -> List[LightVertex]:
-        """מציאת כל המנורות המרכזיות"""
-        center_lights = []
-        for vertex in self.graph.vertices:
-            if isinstance(vertex, LightVertex):
-                light_type = getattr(vertex, 'light_type', 'center')
-                if light_type == "center":
-                    center_lights.append(vertex)
-        logger.debug(f"נמצאו {len(center_lights)} מנורות מרכזיות")
-        return center_lights
-
-    def get_furniture_lights(self) -> List[LightVertex]:
-        """מציאת כל מנורות הריהוט"""
-        furniture_lights = []
-        for vertex in self.graph.vertices:
-            if isinstance(vertex, LightVertex):
-                light_type = getattr(vertex, 'light_type', 'center')
-                if light_type == "furniture":
-                    furniture_lights.append(vertex)
-        logger.debug(f"נמצאו {len(furniture_lights)} מנורות ריהוט (נשמרות)")
-        return furniture_lights
-
-    def get_obstacles(self) -> List[ObstanceVertex]:
-        """מציאת כל המכשולים"""
-        obstacles = [v for v in self.graph.vertices if isinstance(v, ObstanceVertex)]
-        logger.debug(f"נמצאו {len(obstacles)} מכשולים")
-        return obstacles
-
-    def get_reflection_surfaces(self) -> List[ObstanceVertex]:
-        """מציאת משטחים מחזירי אור"""
-        surfaces = []
+        # 🆕 בדוק את כל הצמתים במקום רק furniture
         for vertex in self.graph.vertices:
             if isinstance(vertex, ObstanceVertex):
-                reflection_factor = getattr(vertex, 'reflection_factor', 0)
-                if reflection_factor > 0.05:
-                    surfaces.append(vertex)
-        logger.debug(f"נמצאו {len(surfaces)} משטחים מחזירי אור")
-        return surfaces
+                # עוצמת תאורה בפועל (מחושבת מחדש עם המנורות החדשות)
+                actual_lux = self.calculate_total_illumination_at_point(vertex.point, lights)
 
-    def generate_points_around_furniture(self, furniture: ObstanceVertex) -> List[Point3D]:
-        """יצירת נקודות בדיקה סביב פריט ריהוט"""
-        points = []
-        base_point = furniture.point
+                # תאורה נדרשת
+                required_lux = getattr(vertex, 'required_lux', self.required_lux)
 
-        offsets = [(0.5, 0, 0), (-0.5, 0, 0), (0, 0.5, 0), (0, -0.5, 0)]
+                # חישוב שגיאה
+                if actual_lux < required_lux:
+                    error = ((required_lux - actual_lux) / required_lux) ** 2
+                elif actual_lux > required_lux * 1.5:  # תאורה מוגזמת
+                    error = ((actual_lux - required_lux * 1.5) / required_lux) * 0.5
+                else:
+                    error = 0.0
 
-        for dx, dy, dz in offsets:
-            points.append(Point3D(
-                base_point.x + dx,
-                base_point.y + dy,
-                base_point.z + dz
-            ))
+                total_error += error
+                point_count += 1
 
-        return points
+        return total_error / max(point_count, 1)
 
-    def generate_room_grid_small(self, center: Point3D, radius: float) -> List[Point3D]:
-        """יצירת רשת נקודות קטנה בחדר"""
-        points = []
-        step = 1.0
+    def extract_room_info_from_graph(self) -> Tuple[float, float]:
+        """חילוץ מידע החדר מהגרף"""
+        # חישוב שטח החדר לפי הצמתים
+        all_x = [v.point.x for v in self.graph.vertices]
+        all_y = [v.point.y for v in self.graph.vertices]
+        all_z = [v.point.z for v in self.graph.vertices]
 
-        for x in range(int(-radius / 2), int(radius / 2 + 1), int(step)):
-            for y in range(int(-radius / 2), int(radius / 2 + 1), int(step)):
-                distance = math.sqrt(x * x + y * y)
-                if distance <= radius:
-                    points.append(Point3D(
-                        center.x + x,
-                        center.y + y,
-                        0.8
-                    ))
+        if all_x and all_y:
+            room_width = max(all_x) - min(all_x)
+            room_length = max(all_y) - min(all_y)
+            room_area = max(room_width * room_length, 10.0)  # מינימום 10 מ"ר
+        else:
+            room_area = 20.0  # ברירת מחדל
 
-        return points
+        if all_z:
+            ceiling_height = max(all_z)
+            ceiling_height = max(ceiling_height, 2.5)  # מינימום 2.5 מטר
+        else:
+            ceiling_height = 2.5  # ברירת מחדל
 
-    def calculate_illumination_adequacy_score(self, lights: List[LightVertex], critical_points: List[Point3D]) -> float:
-        """חישוב ציון התאמת התאורה לדרישות"""
-        total_penalty = 0
+        logger.debug(f"מידע חדר: שטח={room_area:.1f}מ\"ר, גובה={ceiling_height:.1f}מ")
+        return room_area, ceiling_height
 
-        for point in critical_points:
-            total_lux = self.calculate_total_illumination_at_point(point, lights)
+    def calculate_vectorial_shadow_score(self, lights: List[LightVertex],
+                                         furniture_obstacles: List[ObstanceVertex],
+                                         room_area: float) -> float:
+        """חישוב ציון צללים וקטוריאלי מדויק"""
+        if not furniture_obstacles:
+            return 0.0
 
-            if total_lux < self.required_lux:
-                penalty = (self.required_lux - total_lux) / self.required_lux
-                total_penalty += penalty * penalty
-            elif total_lux > self.required_lux * 2:
-                penalty = (total_lux - self.required_lux * 2) / self.required_lux
-                total_penalty += penalty * 0.5
+        total_shadow_area = 0.0
+        grid_points = self.generate_room_grid_points(room_area)
 
-        return total_penalty / len(critical_points) if critical_points else 0
+        for obstacle in furniture_obstacles:
+            obstacle_shadow_area = 0.0
+
+            for grid_point in grid_points:
+                shadow_intensity = 0.0
+
+                for light in lights:
+                    # בדיקה אם המכשול חוסם את האור לנקודה זו
+                    if self.is_point_in_shadow(light.point, grid_point, obstacle):
+                        # חישוב עוצמת הצל לפי מרחק מהמכשול
+                        distance_to_obstacle = self.calculate_distance(grid_point, obstacle.point)
+                        shadow_factor = max(0, 1 - (distance_to_obstacle / 2.0))
+                        shadow_intensity += shadow_factor
+
+                # נקודה בצל אם יש צל מלפחות מנורה אחת
+                if shadow_intensity > 0:
+                    obstacle_shadow_area += shadow_intensity
+
+            total_shadow_area += obstacle_shadow_area
+
+        # ציון צללים - ככל שיש יותר צל, הציון גבוה יותר (רע יותר)
+        shadow_score = total_shadow_area / max(len(grid_points), 1)
+        return min(shadow_score, 10.0)  # הגבלת הציון
 
     def calculate_total_illumination_at_point(self, point: Point3D, lights: List[LightVertex]) -> float:
-        """חישוב עוצמת התאורה הכוללת בנקודה"""
-        total_lux = 0
+        """חישוב תאורה כוללת בנקודה (ישיר + מוחזר)"""
+        total_lux = 0.0
 
         for light in lights:
-            direct_lux = self.calculate_direct_illumination_inverse_square(light, point)
-            total_lux += direct_lux
+            # אור ישיר (חוק הריבוע ההפוך)
+            direct_lux = self.calculate_direct_illumination(light, point)
 
-        for light in lights:
-            reflected_lux = self.calculate_reflected_illumination_lambert(light, point)
-            total_lux += reflected_lux
+            # אור מוחזר (חוק למברט)
+            reflected_lux = self.calculate_reflected_illumination(light, point)
+
+            total_lux += direct_lux + reflected_lux
 
         return total_lux
 
-    def calculate_direct_illumination_inverse_square(self, light: LightVertex, point: Point3D) -> float:
-        """חישוב אור ישיר - חוק הריבוע ההפוך"""
+    def calculate_direct_illumination(self, light: LightVertex, point: Point3D) -> float:
+        """חישוב אור ישיר לפי חוק הריבוע ההפוך"""
         distance = self.calculate_distance(light.point, point)
+        distance = max(distance, self.min_distance)
 
-        if distance < 0.1:
-            distance = 0.1
+        # בדיקת חסימה והשפעת חומרים שקופים
+        transmission_factor = self.calculate_transmission_through_materials(light.point, point)
+        if transmission_factor == 0:
+            return 0.0
 
-        if self.is_light_blocked(light.point, point):
-            return 0
+        # חוק הריבוע ההפוך: I = P / (4πr²)
+        luminous_intensity = light.lumens / (4 * math.pi)
 
-        direct_lux = light.lumens / (4 * math.pi * distance * distance)
+        # זווית פגיעה (חוק למברט לקליטה)
+        cos_angle = self.calculate_cos_incident_angle(light.point, point)
+        if cos_angle < self.cos_angle_threshold:
+            return 0.0
 
-        cos_angle = self.calculate_cos_angle_lambert(light.point, point)
-        if cos_angle > self.cos_angle_threshold:
-            direct_lux *= cos_angle
-        else:
-            direct_lux = 0
+        # דעיכת אור באוויר
+        air_attenuation = self.calculate_air_attenuation(distance)
 
-        return direct_lux
+        # חישוב סופי
+        direct_lux = (luminous_intensity * cos_angle * transmission_factor * air_attenuation) / (distance ** 2)
+        return max(0.0, direct_lux)
 
-    def calculate_reflected_illumination_lambert(self, light: LightVertex, point: Point3D) -> float:
-        """חישוב אור מוחזר - חוק למברט"""
-        total_reflected = 0
+    def calculate_reflected_illumination(self, light: LightVertex, point: Point3D) -> float:
+        """חישוב אור מוחזר ממשטחים (חוק למברט עם MaterialReflection)"""
+        total_reflected = 0.0
 
         for surface in self.reflection_surfaces:
+            # מרחקים
             light_to_surface = self.calculate_distance(light.point, surface.point)
             surface_to_point = self.calculate_distance(surface.point, point)
 
-            if light_to_surface < 0.1 or surface_to_point < 0.1:
-                continue
+            light_to_surface = max(light_to_surface, self.min_distance)
+            surface_to_point = max(surface_to_point, self.min_distance)
 
+            # בדיקת חסימות
             if (self.is_light_blocked(light.point, surface.point) or
                     self.is_light_blocked(surface.point, point)):
                 continue
 
-            incident_lux = light.lumens / (4 * math.pi * light_to_surface * light_to_surface)
+            # עוצמת אור פוגעת במשטח
+            incident_intensity = light.lumens / (4 * math.pi * light_to_surface ** 2)
 
-            cos_incident = self.calculate_cos_angle_lambert(light.point, surface.point)
-            cos_reflection = self.calculate_cos_angle_lambert(surface.point, point)
-
-            reflection_factor = getattr(surface, 'reflection_factor', 0.1)
+            # זוויות למברט
+            cos_incident = self.calculate_cos_incident_angle(light.point, surface.point)
+            cos_reflection = self.calculate_cos_incident_angle(surface.point, point)
 
             if cos_incident > 0 and cos_reflection > 0:
-                reflected_lux = (incident_lux * cos_incident * cos_reflection *
-                                 reflection_factor / (math.pi * surface_to_point * surface_to_point))
+                # מקדם החזרה מ-MaterialReflection enum
+                material_name = getattr(surface, 'material', 'unknown')
+                material_reflection = MaterialReflection.get_by_material_name(material_name)
+                reflection_factor = material_reflection.reflection_factor
 
-                total_reflected += reflected_lux
+                # נוסחת למברט המלאה
+                reflected_intensity = (incident_intensity * cos_incident * cos_reflection *
+                                       reflection_factor) / (math.pi * surface_to_point ** 2)
+
+                total_reflected += reflected_intensity
 
         return total_reflected
 
-    def calculate_cos_angle_lambert(self, from_point: Point3D, to_point: Point3D) -> float:
-        """חישוב קוסינוס הזווית לחוק למברט"""
+    def calculate_transmission_through_materials(self, light_pos: Point3D, target_pos: Point3D) -> float:
+        """חישוב העברת אור דרך חומרים שקופים (חוק סנל)"""
+        total_transmission = 1.0
+
+        # בדיקה של כל מכשול בדרך
+        for obstacle in self.obstacles:
+            if self.line_intersects_transparent_obstacle(light_pos, target_pos, obstacle):
+                material_name = getattr(obstacle, 'material', 'default').lower()
+
+                # קבלת מקדם שבירה
+                n1 = self.refractive_indices['air']
+                n2 = self.get_refractive_index(material_name)
+
+                # חישוב זווית פגיעה וזווית שבירה (חוק סנל)
+                incident_angle = self.calculate_incident_angle_to_surface(light_pos, target_pos, obstacle.point)
+                refracted_angle = self.calculate_snells_refraction(incident_angle, n1, n2)
+
+                if refracted_angle is None:  # השתקפות מלאה
+                    return 0.0
+
+                # חישוב מקדם העברה לפי זוויות פרנל
+                transmission_coefficient = self.calculate_fresnel_transmission(incident_angle, refracted_angle, n1, n2)
+
+                # דעיכה בחומר (Beer-Lambert)
+                material_thickness = self.calculate_material_thickness(obstacle)
+                material_absorption = self.calculate_material_absorption(material_name, material_thickness)
+
+                total_transmission *= transmission_coefficient * material_absorption
+
+                # אם השרידות נמוכה מדי, האור לא עובר
+                if total_transmission < 0.01:
+                    return 0.0
+
+        return total_transmission
+
+    def calculate_snells_refraction(self, incident_angle: float, n1: float, n2: float) -> float:
+        """חוק סנל: n₁×sin(θ₁) = n₂×sin(θ₂)"""
+        sin_incident = math.sin(incident_angle)
+        sin_ratio = (n1 / n2) * sin_incident
+
+        # בדיקת השתקפות מלאה
+        if sin_ratio > 1.0:
+            return None  # השתקפות מלאה
+
+        # זווית השבירה
+        refracted_angle = math.asin(sin_ratio)
+        return refracted_angle
+
+    def calculate_fresnel_transmission(self, incident_angle: float, refracted_angle: float,
+                                       n1: float, n2: float) -> float:
+        """חישוב מקדם העברה לפי משוואות פרנל"""
+        cos_i = math.cos(incident_angle)
+        cos_r = math.cos(refracted_angle)
+
+        # משוואות פרנל
+        rs = ((n1 * cos_i - n2 * cos_r) / (n1 * cos_i + n2 * cos_r)) ** 2
+        rp = ((n1 * cos_r - n2 * cos_i) / (n1 * cos_r + n2 * cos_i)) ** 2
+
+        # מקדם השתקפות ממוצע
+        reflectance = (rs + rp) / 2
+
+        # מקדם העברה
+        transmittance = 1 - reflectance
+        return max(0.0, transmittance)
+
+    def calculate_incident_angle_to_surface(self, light_pos: Point3D, target_pos: Point3D,
+                                            surface_pos: Point3D) -> float:
+        """חישוב זווית פגיעה למשטח"""
+        # וקטור האור
+        light_dir_x = target_pos.x - light_pos.x
+        light_dir_y = target_pos.y - light_pos.y
+        light_dir_z = target_pos.z - light_pos.z
+
+        light_length = math.sqrt(light_dir_x ** 2 + light_dir_y ** 2 + light_dir_z ** 2)
+        if light_length == 0:
+            return 0
+
+        # נרמול וקטור האור
+        light_dir_x /= light_length
+        light_dir_y /= light_length
+        light_dir_z /= light_length
+
+        # נורמל המשטח (בהנחה שהמשטח אופקי)
+        normal_x, normal_y, normal_z = 0, 0, 1
+
+        # זווית פגיעה
+        cos_angle = abs(light_dir_x * normal_x + light_dir_y * normal_y + light_dir_z * normal_z)
+        return math.acos(max(0, min(1, cos_angle)))
+
+    def calculate_cos_incident_angle(self, from_point: Point3D, to_point: Point3D) -> float:
+        """חישוב קוסינוס זווית פגיעה"""
         dx = to_point.x - from_point.x
         dy = to_point.y - from_point.y
         dz = to_point.z - from_point.z
 
         distance = math.sqrt(dx * dx + dy * dy + dz * dz)
         if distance == 0:
-            return 0
+            return 0.0
 
-        cos_angle = abs(dz) / distance
+        # נורמל משטח (בהנחה שהמשטח אופקי)
+        normal_z = 1.0
+        light_dir_z = dz / distance
+
+        # קוסינוס הזווית
+        cos_angle = abs(light_dir_z * normal_z)
         return cos_angle
 
-    def calculate_vectorial_shadow_area(self, lights: List[LightVertex], furniture: List[ObstanceVertex]) -> float:
-        """חישוב שטח צל וקטורי אמיתי"""
-        if not lights or not furniture:
-            return 0
+    def line_intersects_transparent_obstacle(self, start: Point3D, end: Point3D, obstacle: ObstanceVertex) -> bool:
+        """בדיקה אם קו עובר דרך חומר שקוף (חלון, זכוכית)"""
+        material_name = getattr(obstacle, 'material', '').lower()
 
-        total_shadow_area = 0
-        floor_z = 0
-
-        for furniture_vertex in furniture:
-            shadow_points = []
-
-            for light in lights:
-                light_to_furniture = self.create_vector(light.point, furniture_vertex.point)
-                shadow_point = self.project_vector_to_floor(light.point, light_to_furniture, floor_z)
-
-                if shadow_point:
-                    shadow_points.append((shadow_point.x, shadow_point.y))
-
-            if len(shadow_points) >= 3:
-                furniture_shadow_area = self.calculate_polygon_area(shadow_points)
-                total_shadow_area += furniture_shadow_area
-
-        return total_shadow_area
-
-    def is_light_blocked(self, light_pos: Point3D, target_pos: Point3D) -> bool:
-        """בדיקה אם יש מכשול בין מקור האור לנקודת היעד"""
-        light_height = light_pos.z
-        target_height = target_pos.z
-
-        if light_height > 2.0 and target_height < 1.5:
+        # רק חומרים שקופים
+        transparent_materials = ['glass', 'זכוכית', 'window', 'חלון']
+        if not any(material in material_name for material in transparent_materials):
             return False
 
+        # בדיקה גיאומטרית אם הקו עובר דרך המכשול
+        return self.line_intersects_obstacle(start, end, obstacle)
+
+    def get_refractive_index(self, material_name: str) -> float:
+        """קבלת מקדם שבירה לפי שם החומר"""
+        material_name = material_name.lower()
+
+        if 'glass' in material_name or 'זכוכית' in material_name:
+            return self.refractive_indices['glass']
+        elif 'water' in material_name or 'מים' in material_name:
+            return self.refractive_indices['water']
+        elif 'plastic' in material_name or 'פלסטיק' in material_name:
+            return self.refractive_indices['plastic']
+        else:
+            return self.refractive_indices['default']
+
+    def calculate_material_thickness(self, obstacle: ObstanceVertex) -> float:
+        """חישוב עובי החומר"""
+        # ניסיון לחלץ מהמאפיינים
+        thickness = getattr(obstacle, 'thickness', None)
+        if thickness:
+            return float(thickness)
+
+        # ברירת מחדל לפי סוג
+        material_name = getattr(obstacle, 'material', '').lower()
+        if 'window' in material_name or 'זכוכית' in material_name:
+            return 0.01  # 1 ס"מ זכוכית
+        elif 'glass' in material_name:
+            return 0.005  # 0.5 ס"מ זכוכית דקה
+        else:
+            return 0.02  # 2 ס"מ ברירת מחדל
+
+    def calculate_material_absorption(self, material_name: str, thickness: float) -> float:
+        """חישוב בליעה בחומר (Beer-Lambert)"""
+        # מקדמי בליעה (באורך גל נראה)
+        absorption_coefficients = {
+            'glass': 0.1,  # זכוכית שקופה
+            'water': 0.05,  # מים
+            'plastic': 0.2,  # פלסטיק
+            'default': 0.1
+        }
+
+        material_name = material_name.lower()
+        absorption_coeff = absorption_coefficients.get('default', 0.1)
+
+        for material, coeff in absorption_coefficients.items():
+            if material in material_name:
+                absorption_coeff = coeff
+                break
+
+        # חוק Beer-Lambert: I = I₀ × e^(-αt)
+        transmission = math.exp(-absorption_coeff * thickness)
+        return transmission
+
+    def calculate_air_attenuation(self, distance: float) -> float:
+        """דעיכת אור באוויר"""
+        # דעיכה קלה באוויר נקי
+        attenuation_coefficient = 0.05  # לק"מ - מתוקן
+        return math.exp(-attenuation_coefficient * distance)
+
+    def is_light_blocked(self, light_pos: Point3D, target_pos: Point3D) -> bool:
+        """בדיקה אם אור חסום על ידי מכשול"""
+        for obstacle in self.obstacles:
+            if self.line_intersects_obstacle(light_pos, target_pos, obstacle):
+                return True
         return False
 
-    def create_vector(self, from_point: Point3D, to_point: Point3D) -> Tuple[float, float, float]:
-        """יצירת וקטור כיוון מנקודה לנקודה"""
-        return (
-            to_point.x - from_point.x,
-            to_point.y - from_point.y,
-            to_point.z - from_point.z
+    def line_intersects_obstacle(self, start: Point3D, end: Point3D, obstacle: ObstanceVertex) -> bool:
+        """בדיקה אם קו אור חותך מכשול"""
+        # בדיקה פשוטה - אם המכשול בין המנורה לנקודה בגובה
+        if (min(start.z, end.z) < obstacle.point.z < max(start.z, end.z)):
+            # מרחק מהמכשול לקו במישור XY
+            distance_to_line = self.distance_point_to_line_2d(start, end, obstacle.point)
+            return distance_to_line < 0.3  # רדיוס מכשול
+        return False
+
+    def distance_point_to_line_2d(self, line_start: Point3D, line_end: Point3D, point: Point3D) -> float:
+        """מרחק נקודה מקו במישור XY"""
+        x1, y1 = line_start.x, line_start.y
+        x2, y2 = line_end.x, line_end.y
+        x0, y0 = point.x, point.y
+
+        numerator = abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1)
+        denominator = math.sqrt((y2 - y1) ** 2 + (x2 - x1) ** 2)
+
+        if denominator == 0:
+            return math.sqrt((x0 - x1) ** 2 + (y0 - y1) ** 2)
+
+        return numerator / denominator
+
+    def is_point_in_shadow(self, light_pos: Point3D, check_point: Point3D, obstacle: ObstanceVertex) -> bool:
+        """בדיקה אם נקודה בצל של מכשול"""
+        return self.line_intersects_obstacle(light_pos, check_point, obstacle)
+
+    def generate_room_grid_points(self, room_area: float, density: float = 0.5) -> List[Point3D]:
+        """יצירת רשת נקודות בחדר לבדיקת צללים"""
+        grid_points = []
+
+        # חישוב גודל החדר משטח
+        room_size = math.sqrt(room_area)
+
+        # יצירת רשת
+        steps = max(int(room_size / density), 3)
+        for i in range(steps):
+            for j in range(steps):
+                x = (i / (steps - 1)) * room_size - room_size / 2
+                y = (j / (steps - 1)) * room_size - room_size / 2
+                z = 0.8  # גובה עבודה
+                grid_points.append(Point3D(x, y, z))
+
+        return grid_points
+
+    def generate_furniture_check_points(self, obstacle: ObstanceVertex) -> List[Point3D]:
+        """יצירת נקודות בדיקה סביב פריט ריהוט"""
+        base_point = obstacle.point
+        check_points = []
+
+        # נקודות בפינות ובמרכז
+        offsets = [(-0.3, -0.3), (0.3, -0.3), (0.3, 0.3), (-0.3, 0.3), (0, 0)]
+
+        for dx, dy in offsets:
+            point = Point3D(base_point.x + dx, base_point.y + dy, base_point.z + 0.1)
+            check_points.append(point)
+
+        return check_points
+
+    def get_required_lux_for_obstacle(self, obstacle: ObstanceVertex) -> float:
+        """קביעת לוקס נדרש לפי סוג המכשול"""
+        element_type = getattr(obstacle, 'element_type', '').lower()
+
+        if 'desk' in element_type or 'workbench' in element_type:
+            return 500  # שולחן עבודה
+        elif 'counter' in element_type:
+            return 400  # דלפק
+        elif 'table' in element_type:
+            return 300  # שולחן רגיל
+        elif 'sofa' in element_type or 'chair' in element_type:
+            return 200  # ישיבה
+        else:
+            return self.required_lux  # ברירת מחדל
+
+    # תצורות מנורות
+    def config_single_simple(self, center: Point3D, ceiling_height: float):
+        """תצורה של מנורה אחת"""
+        lumens = 3000  # לומן בסיסי
+        light = LightVertex(
+            Point3D(center.x, center.y, ceiling_height - 0.3),
+            lux=0, lumens=lumens, target_id=None, light_type="center"
         )
+        return {'lights': [light], 'aesthetic_score': 1.0}
 
-    def project_vector_to_floor(self, light_pos: Point3D, direction: Tuple[float, float, float],
-                                floor_z: float) -> Point3D:
-        """הקרנת וקטור מהמנורה דרך הריהוט אל הרצפה"""
-        dx, dy, dz = direction
+    def config_dual_simple(self, center: Point3D, ceiling_height: float, room_area: float):
+        """תצורה של 2 מנורות"""
+        spacing = min(2.0, math.sqrt(room_area) * 0.4)
+        lumens_per_light = 1800
 
-        if dz >= 0:
-            return None
+        lights = [
+            LightVertex(Point3D(center.x - spacing / 2, center.y, ceiling_height - 0.3),
+                        lux=0, lumens=lumens_per_light, target_id=None, light_type="center"),
+            LightVertex(Point3D(center.x + spacing / 2, center.y, ceiling_height - 0.3),
+                        lux=0, lumens=lumens_per_light, target_id=None, light_type="center")
+        ]
+        return {'lights': lights, 'aesthetic_score': 0.8}
 
-        t = (floor_z - light_pos.z) / dz
+    def config_triangle_simple(self, center: Point3D, ceiling_height: float, room_area: float):
+        """תצורה של 3 מנורות במשולש"""
+        radius = min(1.5, math.sqrt(room_area) * 0.3)
+        lumens_per_light = 1200
+        angles = [0, 2 * math.pi / 3, 4 * math.pi / 3]
 
-        if t < 0:
-            return None
+        lights = []
+        for angle in angles:
+            x = center.x + radius * math.cos(angle)
+            y = center.y + radius * math.sin(angle)
+            light = LightVertex(Point3D(x, y, ceiling_height - 0.3),
+                                lux=0, lumens=lumens_per_light, target_id=None, light_type="center")
+            lights.append(light)
 
-        shadow_x = light_pos.x + t * dx
-        shadow_y = light_pos.y + t * dy
+        return {'lights': lights, 'aesthetic_score': 0.9}
 
-        return Point3D(shadow_x, shadow_y, floor_z)
+    def config_square_simple(self, center: Point3D, ceiling_height: float, room_area: float):
+        """תצורה של 4 מנורות בריבוע"""
+        offset = min(1.2, math.sqrt(room_area) * 0.25)
+        lumens_per_light = 900
+        positions = [(-offset, -offset), (offset, -offset), (offset, offset), (-offset, offset)]
 
-    def calculate_polygon_area(self, points: List[Tuple[float, float]]) -> float:
-        """חישוב שטח פוליגון בשיטת הנעל"""
-        if len(points) < 3:
-            return 0
+        lights = []
+        for dx, dy in positions:
+            light = LightVertex(Point3D(center.x + dx, center.y + dy, ceiling_height - 0.3),
+                                lux=0, lumens=lumens_per_light, target_id=None, light_type="center")
+            lights.append(light)
 
-        area = 0
-        n = len(points)
+        return {'lights': lights, 'aesthetic_score': 0.95}
 
-        for i in range(n):
-            j = (i + 1) % n
-            area += points[i][0] * points[j][1]
-            area -= points[j][0] * points[i][1]
-
-        return abs(area) / 2
-
+    # פונקציות עזר
     def calculate_distance(self, p1: Point3D, p2: Point3D) -> float:
-        """חישוב מרחק אוקלידי בין שתי נקודות"""
-        return math.sqrt(
-            (p1.x - p2.x) ** 2 +
-            (p1.y - p2.y) ** 2 +
-            (p1.z - p2.z) ** 2
-        )
+        """חישוב מרחק תלת מימדי"""
+        return math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2)
+
+    def get_center_lights(self) -> List[LightVertex]:
+        """קבלת מנורות מרכזיות"""
+        return [v for v in self.graph.vertices
+                if isinstance(v, LightVertex) and getattr(v, 'light_type', 'center') == 'center']
+
+    def get_furniture_lights(self) -> List[LightVertex]:
+        """קבלת מנורות ריהוט"""
+        return [v for v in self.graph.vertices
+                if isinstance(v, LightVertex) and getattr(v, 'light_type', 'center') == 'furniture']
+
+    def get_obstacles(self) -> List[ObstanceVertex]:
+        """קבלת כל המכשולים"""
+        return [v for v in self.graph.vertices if isinstance(v, ObstanceVertex)]
+
+    def get_furniture_obstacles(self) -> List[ObstanceVertex]:
+        """קבלת מכשולי ריהוט בלבד"""
+        furniture_obstacles = []
+        for vertex in self.graph.vertices:
+            if isinstance(vertex, ObstanceVertex):
+                element_type = getattr(vertex, 'element_type', '').lower()
+                if any(ftype in element_type for ftype in ['table', 'desk', 'sofa', 'chair', 'counter']):
+                    furniture_obstacles.append(vertex)
+        return furniture_obstacles
+
+    def get_reflection_surfaces(self) -> List[ObstanceVertex]:
+        """קבלת משטחים מחזירי אור"""
+        return [v for v in self.graph.vertices
+                if isinstance(v, ObstanceVertex) and getattr(v, 'reflection_factor', 0) > 0.05]

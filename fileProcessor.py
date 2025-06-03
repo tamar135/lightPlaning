@@ -163,7 +163,6 @@ class fileProcessor:
                              len(graph.vertices) if hasattr(graph, 'vertices') and graph.vertices else 0)
             except Exception as e:
                 logger.error("Error building graph: %s", str(e), exc_info=True)
-                # אם יש שגיאה, צור גרף ריק
                 graph = Graph()
                 logger.debug("Created empty graph due to error")
 
@@ -205,7 +204,7 @@ class fileProcessor:
             # נסה לסגור את החיבור לבסיס הנתונים אם הוא פתוח
             try:
                 if hasattr(self, 'db') and self.db and hasattr(self.db, 'connection') and self.db.connection:
-                    self.db.connection.commit()  # נסה לעשות commit לפני הזריקת השגיאה
+                    self.db.connection.commit()
             except Exception as commit_error:
                 logger.error("Error during connection commit: %s", str(commit_error))
             raise HTTPException(status_code=500, detail=f"שגיאה בעיבוד הקובץ: {str(e)}")

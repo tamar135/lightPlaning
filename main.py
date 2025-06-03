@@ -7,7 +7,6 @@ from controller.UserController import router as user_router
 from controller.UploadController import router as upload_router
 from controller.UsageController import router as usage_router
 from controller.LightController import router as light_router
-from controller.IFCVisualController import router as visual_router
 from controller.DecorativeLightController import router as decorative_router
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -34,7 +33,6 @@ app.include_router(user_router)
 app.include_router(upload_router)
 app.include_router(usage_router)
 app.include_router(light_router)
-app.include_router(visual_router)
 app.include_router(decorative_router)
 
 @app.get("/")
