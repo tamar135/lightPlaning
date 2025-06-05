@@ -43,7 +43,7 @@ def initialize_models():
             "room_classifier.h5",  # אם הועתק לתיקייה הראשית
             os.path.join("machineLarning", "room_classification", "room_classifier.h5")
         ]
-
+        # possible_paths=[r"C:\Users\user\Desktop\פרויקט גמר\fastApiProject\room_classifier_improved.h5"]
         model_loaded = False
         for model_path in possible_paths:
             if os.path.exists(model_path):
@@ -100,18 +100,17 @@ async def upload_ifc_with_image(
 
         logger.info(f"תמונה נשמרה זמנית: {temp_image_path}")
 
-        # **שלב 1: זיהוי סוג חדר מהתמונה**
+        #  זיהוי סוג חדר מהתמונה
         room_type = await classify_room_from_image(temp_image_path)
         logger.info(f"סוג חדר זוהה: {room_type}")
 
-        # **שלב 2: תכנון תאורה רגילה עם IFC + סוג חדר**
+        #  תכנון תאורה רגילה עם IFC + סוג חדר
         lighting_result = await processor.process_and_save_file(ifc_file, user_id, room_type)
         usage_id = lighting_result["usage_id"]
 
-        # **שלב 3: תכנון תאורת נוי עם תמונה + סוג חדר**
+        #  תכנון תאורת נוי עם תמונה + סוג חדר
         decorative_suggestions = await plan_decorative_lighting(temp_image_path, room_type)
 
-        # תוצאה משולבת
         result = {
             "usage_id": usage_id,
             "room_type_detected": room_type,
@@ -161,8 +160,8 @@ async def classify_room_from_image(image_path: str) -> str:
         predicted_class = np.argmax(predictions[0])
         confidence = np.max(predictions[0])
 
-        # מיפוי תוצאות (התאם למודל שלך)
-        room_types = ["bathroom", "bedroom", "dining", "kitchen", "living", "office"]
+        # מיפוי תוצאות
+        room_types = ["bathroom", "bedroom", "dining", "gaming", "kitchen", "laundry", "living", "office", "terrace", "yard"]
 
         if predicted_class < len(room_types):
             detected_room = room_types[predicted_class]

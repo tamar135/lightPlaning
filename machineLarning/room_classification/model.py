@@ -20,7 +20,7 @@ train_datagen = ImageDataGenerator(
 # טעינת נתוני האימון
 train_generator = train_datagen.flow_from_directory(
     data_dir,
-    target_size=(150, 150),  # גודל תמונה קטן יותר לחיסכון בחישוב
+    target_size=(64, 64),  # גודל תמונה קטן יותר לחיסכון בחישוב
     batch_size=16,
     class_mode='categorical',
     subset='training'
@@ -40,7 +40,7 @@ print("מיפוי תוויות:", train_generator.class_indices)
 
 # בניית מודל CNN פשוט
 model = tf.keras.Sequential([
-    tf.keras.layers.Conv2D(16, (3, 3), activation='relu', input_shape=(150, 150, 3)),
+    tf.keras.layers.Conv2D(16, (3, 3), activation='relu', input_shape=(64, 64, 3)),
     tf.keras.layers.MaxPooling2D(2, 2),
     tf.keras.layers.Conv2D(32, (3, 3), activation='relu'),
     tf.keras.layers.MaxPooling2D(2, 2),
@@ -48,6 +48,8 @@ model = tf.keras.Sequential([
     tf.keras.layers.MaxPooling2D(2, 2),
     tf.keras.layers.Flatten(),
     tf.keras.layers.Dense(128, activation='relu'),
+    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.Dense(64, activation='relu'),
     tf.keras.layers.Dropout(0.3),
     tf.keras.layers.Dense(train_generator.num_classes, activation='softmax')
 ])
@@ -65,7 +67,7 @@ model.summary()
 # אימון המודל
 history = model.fit(
     train_generator,
-    epochs=10,
+    epochs=250,
     validation_data=validation_generator
 )
 
