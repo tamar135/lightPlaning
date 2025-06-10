@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Smart Lighting Design API",
     description="מערכת תכנון תאורה חכמה עם זיהוי סוג חדר ותאורת נוי",
-    version="2.0.0"
+    version="1.0.0"
 )
 
-# הגדרת CORS
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -27,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# רישום כל ה-Routers
+# Routers
 app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(upload_router)
@@ -38,7 +38,7 @@ app.include_router(decorative_router)
 @app.get("/")
 def read_root():
     return {
-        "message": "Smart Lighting Design API v2.0",
+        "message": "Smart Lighting Design API v1.0",
         "features": [
             "Regular lighting design",
             "Room type classification",
@@ -48,9 +48,9 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "version": "2.0.0"}
+    return {"status": "healthy", "version": "1.0.0"}
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting Smart Lighting Design API v2.0...")
+    logger.info("Starting Smart Lighting Design API v1.0...")
     uvicorn.run(app, host="0.0.0.0", port=8000)

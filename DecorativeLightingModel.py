@@ -8,7 +8,6 @@ class DecorativeLightingModel:
         print("מודל נטען.")
 
         # מיפוי אלמנטים למספר המלצות תאורה לפי סוג חדר
-        # כל חדר מכיל רשימה של אלמנטים מותרים + המלצות רלוונטיות
         self.room_recommendations = {
             "bathroom": {
                 "allowed_elements": ["mirror", "sink", "toilet", "bathtub"],

@@ -1,4 +1,3 @@
-# ShadowOptimizer.py - גרסה מתוקנת עם חישוב צללים וקטוריאלי מדויק
 import math
 import logging
 from typing import List, Tuple, Dict
@@ -38,8 +37,8 @@ class ShadowOptimizer:
         self.calculate_accurate_illumination_for_all_vertices()
 
     def calculate_accurate_illumination_for_all_vertices(self):
-        """🔬 חישוב מדויק של תאורה לכל צומת בגרף"""
-        logger.debug("🔬 מחשב תאורה מדויקת לכל צומת")
+        """ חישוב מדויק של תאורה לכל צומת בגרף"""
+        logger.debug(" מחשב תאורה מדויקת לכל צומת")
 
         for vertex in self.graph.vertices:
             if isinstance(vertex, ObstanceVertex):
@@ -49,7 +48,7 @@ class ShadowOptimizer:
                 # קביעת עוצמה נדרשת לפי סוג האלמנט
                 vertex.required_lux = self.get_required_lux_by_element_type(vertex)
 
-                # עדכון מקדם החזרה לפי החומר האמיתי מה-enum
+                # עדכון מקדם החזרה לפי ה-enum
                 self.update_material_reflection_factor(vertex)
 
                 logger.debug(f"צומת ({vertex.point.x:.1f},{vertex.point.y:.1f}): "
@@ -95,10 +94,9 @@ class ShadowOptimizer:
         logger.debug(f"חומר '{material_name}' -> מקדם החזרה: {vertex.reflection_factor}")
 
     def optimize_lighting_room(self) -> List[LightVertex]:
-        """🏠 אופטימיזציה מדויקת לחדר לפי חוקי הפיזיקה - ללא שינוי!"""
-        logger.debug("🔬 מתחיל אופטימיזציה מבוססת פיזיקה לחדר")
+        """ אופטימיזציה מדויקת לחדר לפי חוקי הפיזיקה - ללא שינוי!"""
+        logger.debug(" מתחיל אופטימיזציה מבוססת פיזיקה לחדר")
 
-        # קבלת מנורות מרכזיות קיימות
         center_lights = self.get_center_lights()
         if not center_lights:
             logger.warning("לא נמצאו מנורות מרכזיות קיימות")
@@ -110,8 +108,9 @@ class ShadowOptimizer:
         # חילוץ מידע החדר מהגרף
         room_area, ceiling_height = self.extract_room_info_from_graph()
 
-        # 4 תצורות מנורות שונות - עם מיקום בטוח
         configurations = [
+            ("מנורה אחת",
+             self.config_single_safe(current_center.point, ceiling_height, room_area, furniture_obstacles)),
             ("2 מנורות", self.config_dual_safe(current_center.point, ceiling_height, room_area, furniture_obstacles)),
             ("משולש 3 מנורות",
              self.config_triangle_safe(current_center.point, ceiling_height, room_area, furniture_obstacles)),
@@ -516,7 +515,44 @@ class ShadowOptimizer:
 
         return total_transmission
 
+    def config_single_safe(self, center: Point3D, ceiling_height: float, room_area: float,
+                           furniture_obstacles: List[ObstanceVertex]):
+        """תצורה של מנורה אחת במיקום בטוח"""
+        # מציאת מיקום בטוח הרחק מריהוט
+        safe_position = self.find_safe_position(center, furniture_obstacles)
 
+        lumens = 3000
+        light = LightVertex(
+            Point3D(safe_position.x, safe_position.y, ceiling_height - 0.3),
+            lux=0, lumens=lumens, target_id=None, light_type="center"
+        )
+        return {'lights': [light], 'aesthetic_score': 1.0}
+
+    def find_safe_position(self, center: Point3D, furniture_obstacles: List[ObstanceVertex]) -> Point3D:
+        """מציאת מיקום בטוח למנורה הרחק מריהוט"""
+        if not furniture_obstacles:
+            return center
+
+        # בדיקת המיקום המקורי
+        min_distance = min([self.calculate_distance(center, obs.point) for obs in furniture_obstacles])
+        if min_distance > 1.5:  # מרחק בטוח
+            return center
+
+        # חיפוש מיקום חלופי
+        for angle in [0, math.pi / 4, math.pi / 2, 3 * math.pi / 4, math.pi, 5 * math.pi / 4, 3 * math.pi / 2,
+                      7 * math.pi / 4]:
+            for radius in [1.0, 1.5, 2.0]:
+                candidate = Point3D(
+                    center.x + radius * math.cos(angle),
+                    center.y + radius * math.sin(angle),
+                    center.z
+                )
+                min_dist_to_furniture = min(
+                    [self.calculate_distance(candidate, obs.point) for obs in furniture_obstacles])
+                if min_dist_to_furniture > 1.2:
+                    return candidate
+
+        return center  # ברירת מחדל
 
     def config_dual_safe(self, center: Point3D, ceiling_height: float, room_area: float,
                          furniture_obstacles: List[ObstanceVertex]):

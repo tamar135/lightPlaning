@@ -71,7 +71,7 @@ def extract_room_info(model, room_type) -> dict:
     }
 
     try:
-        # נסה לחלץ מידע מ-IfcSpace אם קיים
+        # חילוץ מידע מ-IfcSpace
         spaces = model.by_type("IfcSpace")
 
         if spaces:
@@ -89,7 +89,7 @@ def extract_room_info(model, room_type) -> dict:
             room_info["RoomHeight"] = space_geometry.get("Height", 2.5)
             room_info["RoomArea"] = space_geometry.get("Area", 20.0)
 
-        # אם לא נמצא מרחב, נסה לחשב מהקירות
+        # אם לא נמצא מרחב, נסיון לחשב מהקירות
         else:
             logger.debug("לא נמצאו מרחבים, מחשב מידות מקירות")
             room_bounds = calculate_room_bounds_from_walls(model)
@@ -98,13 +98,13 @@ def extract_room_info(model, room_type) -> dict:
                                          (room_bounds['max_y'] - room_bounds['min_y']))
 
     except Exception as e:
-        logger.warning("שגיאה בחילוץ מידע חדר: %s, משתמש בברירות מחדל", str(e))
+        logger.warning("שגיאה בחילוץ מידע, משתמש בברירות מחדל")
 
     # קביעת לוקס מומלץ לפי סוג החדר
     room_type_enum = RoomType.get_by_name(room_info["RoomType"])
     room_info["RecommendedLux"] = room_type_enum.recommended_lux
 
-    logger.debug("מידע חדר סופי: %s", room_info)
+    logger.debug("מידע חדר סופי", room_info)
     return room_info
 
 

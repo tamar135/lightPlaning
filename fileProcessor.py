@@ -66,7 +66,7 @@ class fileProcessor:
             logger.debug(f"Saved {file_extension} file to: {temp_file_path}")
 
         try:
-            # עיבוד הקובץ ל-JSON בהתאם לסוג הקובץ
+            # עיבוד הקובץ ל-JSON
             if file_extension == ".ifc":
                 logger.debug("Processing IFC file with path: %s", temp_file_path)
                 json_path = IFCProcessor.process_ifc_file(temp_file_path, room_type)
@@ -113,7 +113,6 @@ class fileProcessor:
                 logger.error("Failed to create usage record")
                 raise HTTPException(status_code=500, detail="שגיאה בשמירת הנתונים במסד - usage_data is None")
 
-            # שימוש בשיטה בטוחה יותר לחילוץ מזהה ה-usage
             try:
                 if isinstance(usage_data, tuple) and len(usage_data) > 0:
                     usage_id = usage_data[0]
@@ -124,7 +123,6 @@ class fileProcessor:
                 elif isinstance(usage_data, int):
                     usage_id = usage_data
                 else:
-                    # במקרה חירום - השתמש במזהה קבוע
                     logger.warning("Could not determine usage_id from %s - using default value", usage_data)
                     usage_id = 1
                 logger.debug("Extracted usage_id: %s", usage_id)
@@ -194,7 +192,6 @@ class fileProcessor:
                             light_count += 1
                         except Exception as e:
                             logger.error("Error creating light: %s", str(e), exc_info=True)
-                            # המשך לנורה הבאה גם אם היתה שגיאה
 
             logger.debug("Created %d lights", light_count)
             return {"usage_id": usage_id, "message": f"File processed successfully, created {light_count} lights"}
