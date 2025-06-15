@@ -1,4 +1,3 @@
-# BuildGraph.py - גרסה מתוקנת
 import json
 import os
 import logging
@@ -114,7 +113,7 @@ class BuildGraph:
                                                                        actual_ceiling_height, recommended_lux)
                         if furniture_light:
                             furniture_elements.append(element)
-                            logger.debug("🪑 הוספתי מנורת ריהוט")
+                            logger.debug(" נוספה מנורת ריהוט")
 
                 except Exception as e:
                     logger.error("Error processing element %d: %s", i, str(e))
@@ -130,13 +129,13 @@ class BuildGraph:
         except Exception as e:
             logger.warning("Could not display graph visualization: %s", str(e))
 
-        # אופטימיזציה - תוקן
+        # אופטימיזציה
         try:
-            logger.debug("🔧 מתחיל אופטימיזציה...")
+            logger.debug(" מתחיל אופטימיזציה...")
 
             optimized_lights = algorithm.algorithm(graph)
 
-            logger.debug(f"✅ האופטימיזציה החזירה: {len(optimized_lights)} מנורות")
+            logger.debug(f" האופטימיזציה החזירה: {len(optimized_lights)} מנורות")
 
             # הצגת תוצאות האופטימיזציה
             try:
@@ -145,13 +144,13 @@ class BuildGraph:
                 logger.warning("Could not display optimized graph: %s", str(e))
 
         except Exception as e:
-            logger.error(f"❌ שגיאה באופטימיזציה: {str(e)}")
+            logger.error(f" שגיאה באופטימיזציה: {str(e)}")
 
         logger.debug(f"מחזיר גרף עם {len(graph.vertices)} צמתים ו-{len(graph.edges)} קשתות")
         return graph
 
     def calculate_room_center(self, elements: list) -> tuple:
-        """חישוב מרכז החדר לפי האלמנטים - פונקציה חדשה"""
+        """חישוב מרכז החדר לפי האלמנטים """
         if not elements:
             return (0, 0)
 
@@ -174,13 +173,13 @@ class BuildGraph:
         if all_x and all_y:
             center_x = (min(all_x) + max(all_x)) / 2
             center_y = (min(all_y) + max(all_y)) / 2
-            logger.debug(f"🎯 מרכז החדר מחושב: ({center_x:.1f}, {center_y:.1f})")
+            logger.debug(f" מרכז החדר מחושב: ({center_x:.1f}, {center_y:.1f})")
             return (center_x, center_y)
 
         return (0, 0)
 
     def is_require_light_fixed(self, element: dict) -> bool:
-        """בדיקה מתוקנת - רק פריטים ספציפיים דורשים תאורה"""
+        """רק פריטים ספציפיים דורשים תאורה"""
         if not isinstance(element, dict):
             return False
 
@@ -419,7 +418,6 @@ class BuildGraph:
             else:
                 ax.scatter(x, y, z, c='gray', s=80, marker='.', alpha=0.5)
 
-        # הצגת קשתות
         for edge in graph.edges:
             if edge.start < len(graph.vertices) and edge.end < len(graph.vertices):
                 start_vertex = graph.vertices[edge.start]

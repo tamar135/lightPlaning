@@ -65,7 +65,7 @@ def extract_room_info(model, room_type) -> dict:
     """חילוץ מידע על חדר אחד"""
     room_info = {
         "RecommendedLux": 300,
-        "RoomType": room_type or "bedroom",
+        "RoomType": room_type or "unknown",
         "RoomHeight": 2.5,
         "RoomArea": 20.0
     }
@@ -89,7 +89,7 @@ def extract_room_info(model, room_type) -> dict:
             room_info["RoomHeight"] = space_geometry.get("Height", 2.5)
             room_info["RoomArea"] = space_geometry.get("Area", 20.0)
 
-        # אם לא נמצא מרחב, נסיון לחשב מהקירות
+        #  נסיון לחשב מהקירות
         else:
             logger.debug("לא נמצאו מרחבים, מחשב מידות מקירות")
             room_bounds = calculate_room_bounds_from_walls(model)
@@ -193,7 +193,7 @@ def identify_room_type_from_name(room_name, room_long_name=""):
         if any(keyword in name_combined for keyword in keywords):
             return room_type
 
-    return "bedroom"  # ברירת מחדל
+    return "unknown"
 
 
 def extract_space_geometry(space):
@@ -206,7 +206,7 @@ def extract_space_geometry(space):
     }
 
     try:
-        # ניסיון לחילוץ גיאומטריה
+        # חילוץ גיאומטריה
         geom = ifcopenshell.geom.create_shape(GEOMETRY_SETTINGS, space)
 
         if geom and geom.geometry:
@@ -230,7 +230,7 @@ def extract_space_geometry(space):
     except Exception as e:
         logger.debug(f"לא ניתן לחלץ גיאומטריה לחדר: {str(e)}")
 
-    # ניסיון חילוץ מתכונות
+    #  חילוץ מתכונות
     try:
         psets = get_element_properties(space)
         for prop_set_name, props in psets.items():
@@ -244,7 +244,6 @@ def extract_space_geometry(space):
     return location_data
 
 
-# שאר הפונקציות נשארות זהות...
 def extract_geometry_coordinates(element):
     """
     מחלץ קואורדינטות גיאומטריות אמיתיות של אלמנט
@@ -363,11 +362,11 @@ def apply_default_dimensions(result, element_type):
 
 
 def extract_element_data(element, model, category):
-    """מחלץ מידע מפורט על אלמנט בודד"""
+    """מחלץ מידע מפורט על אלמנט"""
     element_name = getattr(element, "Name", None) or ""
     element_type = element.is_a()
 
-    # זיהוי סוג האלמנט העברי
+    # זיהוי סוג האלמנט
     element_type_mapping = {
         "IfcWall": "קיר",
         "IfcWallStandardCase": "קיר",
@@ -402,13 +401,13 @@ def extract_element_data(element, model, category):
             element_subtype = ftype
             break
 
-    # חילוץ מיקום ומידות באמצעות הגיאומטריה המתוקנת
+    # חילוץ מיקום ומידות באמצעות הגיאומטריה
     location_data = extract_geometry_coordinates(element)
 
     # חלץ חומרים
     materials_str = extract_materials(element, model)
 
-    # קביעת מאפייני החזרת אור לפי החומר
+    # מאפייני החזרת אור לפי החומר
     material_reflection = MaterialReflection.get_by_material_name(materials_str)
 
     # קביעת דרישות תאורה לאלמנט
@@ -419,7 +418,7 @@ def extract_element_data(element, model, category):
         else:
             required_lux = 300
 
-    # יצירת המילון שיוחזר
+    # יצירת המילון
     element_data = {
         "ElementType": element_subtype or element_type_hebrew,
         "X": location_data.get("X", 0),
@@ -440,7 +439,7 @@ def extract_element_data(element, model, category):
 
 
 def get_element_properties(element):
-    """מחלץ את כל המאפיינים של אלמנט"""
+    """מחלץ מאפיינים של אלמנט"""
     properties = {}
 
     try:
@@ -483,4 +482,4 @@ def extract_materials(element, model):
     except Exception as e:
         logger.debug("שגיאה בחילוץ חומרים: %s", str(e))
 
-    return ", ".join(materials) if materials else "לא ידוע"
+    return ", ".join(materials) if materials else "unknown"

@@ -17,7 +17,7 @@ def algorithm(room_graph: Graph):
         optimizer = ShadowOptimizer(room_graph)
         optimized_lights = optimizer.optimize_lighting_room()
 
-        # במקום למחוק ולהוסיף - רק החלף את המנורות המרכזיות
+        # החלפת המנורות המרכזיות
         replace_center_lights_only(room_graph, optimized_lights)
 
         logger.debug(f"Room-based optimization completed. Final lights: {len(optimized_lights)}")
@@ -28,21 +28,23 @@ def algorithm(room_graph: Graph):
         return []
 
 
+
 def replace_center_lights_only(graph: Graph, new_lights: list):
     """
-    מחליף רק את המנורות המרכזיות בלי לפגוע במבנה הגרף
+    מחליף רק את המנורות המרכזיות - תיקון כפילות
     """
-    # מסמן את המנורות המרכזיות הישנות למחיקה
+    # מפריד בין מרכז לריהוט ברשימה החדשה
+    new_center_lights = [light for light in new_lights
+                         if getattr(light, 'light_type', 'center') == 'center']
+
+    # מחליף רק מנורות מרכז
+    center_light_index = 0
     for i, vertex in enumerate(graph.vertices):
         if isinstance(vertex, LightVertex) and getattr(vertex, 'light_type', 'center') == 'center':
-            # מחליף את המנורה הישנה במנורה חדשה מהרשימה
-            if new_lights:
-                graph.vertices[i] = new_lights.pop(0)
+            if center_light_index < len(new_center_lights):
+                graph.vertices[i] = new_center_lights[center_light_index]
+                center_light_index += 1
 
-    # מוסיף מנורות נוספות שנותרו (אם יש)
-    for remaining_light in new_lights:
-        graph.add_vertex(remaining_light)
-
-    # מנקה קשתות שבורות (אם יש)
-    graph.edges = [edge for edge in graph.edges
-                   if edge.start < len(graph.vertices) and edge.end < len(graph.vertices)]
+    # מוסיף מנורות מרכז נוספות (אם יש)
+    for i in range(center_light_index, len(new_center_lights)):
+        graph.add_vertex(new_center_lights[i])

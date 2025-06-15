@@ -20,7 +20,7 @@ train_datagen = ImageDataGenerator(
 # טעינת נתוני האימון
 train_generator = train_datagen.flow_from_directory(
     data_dir,
-    target_size=(64, 64),  # גודל תמונה קטן יותר לחיסכון בחישוב
+    target_size=(64, 64),
     batch_size=16,
     class_mode='categorical',
     subset='training'
@@ -38,7 +38,7 @@ validation_generator = train_datagen.flow_from_directory(
 # הצגת המיפוי של התוויות
 print("מיפוי תוויות:", train_generator.class_indices)
 
-# בניית מודל CNN פשוט
+# בניית מודל CNN
 model = tf.keras.Sequential([
     tf.keras.layers.Conv2D(16, (3, 3), activation='relu', input_shape=(64, 64, 3)),
     tf.keras.layers.MaxPooling2D(2, 2),
