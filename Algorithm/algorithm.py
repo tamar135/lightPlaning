@@ -31,7 +31,7 @@ def algorithm(room_graph: Graph):
 
 def replace_center_lights_only(graph: Graph, new_lights: list):
     """
-    מחליף רק את המנורות המרכזיות - תיקון כפילות
+    מחליף רק את המנורות המרכזיות 
     """
     # מפריד בין מרכז לריהוט ברשימה החדשה
     new_center_lights = [light for light in new_lights

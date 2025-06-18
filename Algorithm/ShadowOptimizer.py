@@ -517,7 +517,7 @@ class ShadowOptimizer:
     def calculate_aesthetic_score(self, lights: List[LightVertex]) -> float:
         """בדיקה רק של מרחק מנורות מרכז מול ריהוט"""
 
-        center_lights = lights  # המנורות שנבדקות (מרכזיות)
+        center_lights = lights
         furniture_lights = self.furniture_lights
 
         if not furniture_lights:

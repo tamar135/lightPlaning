@@ -14,7 +14,6 @@ from MODEL.Light import Light
 from models import Graph, LightVertex
 from BuildGraph import BuildGraph
 
-# הגדרת לוגר
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 

@@ -62,7 +62,7 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
 
 
 def extract_room_info(model, room_type) -> dict:
-    """חילוץ מידע על חדר אחד"""
+    """חילוץ מידע על חדר """
     room_info = {
         "RecommendedLux": 300,
         "RoomType": room_type or "unknown",
