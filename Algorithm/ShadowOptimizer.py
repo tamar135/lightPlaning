@@ -435,12 +435,12 @@ class ShadowOptimizer:
     # 4 תצורות המנורות
     def config_single_center(self, center: Point3D, ceiling_height: float):
         light = LightVertex(Point3D(center.x, center.y, ceiling_height - 0.3),
-                            lux=0, lumens=3000, target_id=None, light_type="center")
+                            lux=0, lumens=self.required_lux, target_id=None, light_type="center")
         return {'lights': [light], 'aesthetic_score': 1.0}
 
     def config_dual_line(self, center: Point3D, ceiling_height: float, room_area: float):
         spacing = min(2.5, math.sqrt(room_area) * 0.4)
-        lumens_per_light = 1800
+        lumens_per_light = (self.required_lux/2) * 0.7
         lights = [
             LightVertex(Point3D(center.x - spacing / 2, center.y, ceiling_height - 0.3),
                         lux=0, lumens=lumens_per_light, target_id=None, light_type="center"),
@@ -451,7 +451,7 @@ class ShadowOptimizer:
 
     def config_triangle_equal(self, center: Point3D, ceiling_height: float, room_area: float):
         radius = min(1.8, math.sqrt(room_area) * 0.35)
-        lumens_per_light = 1200
+        lumens_per_light = (self.required_lux/3) * 0.6
         angles = [math.radians(90), math.radians(210), math.radians(330)]
         lights = []
         for angle in angles:
@@ -464,7 +464,7 @@ class ShadowOptimizer:
 
     def config_square_grid(self, center: Point3D, ceiling_height: float, room_area: float):
         offset = min(1.5, math.sqrt(room_area) * 0.3)
-        lumens_per_light = 900
+        lumens_per_light = (self.required_lux / 4) * 0.5
         positions = [(-offset, -offset), (offset, -offset), (offset, offset), (-offset, offset)]
         lights = []
         for dx, dy in positions:

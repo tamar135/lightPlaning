@@ -131,29 +131,10 @@ class fileProcessor:
                 usage_id = 1
                 logger.debug("Using default usage_id: %s after error", usage_id)
 
-            # הגדרת תצורות תאורה לפי סוגי חדרים
-            room_lighting_config = {
-                "bedroom": {
-                    "table": {"Lux": 300, "LightHeightOffset": 0.5},
-                    "desk": {"Lux": 500, "LightHeightOffset": 0.5},
-                    "counter": {"Lux": 400, "LightHeightOffset": 0.6}
-                },
-                "kitchen": {
-                    "counter": {"Lux": 500, "LightHeightOffset": 0.6},
-                    "table": {"Lux": 300, "LightHeightOffset": 0.5}
-                },
-                "living": {
-                    "table": {"Lux": 250, "LightHeightOffset": 0.5}
-                },
-                "office": {
-                    "desk": {"Lux": 600, "LightHeightOffset": 0.5},
-                    "table": {"Lux": 450, "LightHeightOffset": 0.5}
-                }
-            }
 
             # בניית הגרף
             logger.debug("Building graph from JSON path: %s", json_path)
-            builder = BuildGraph(room_lighting_config.get(room_type.lower(), {}))
+            builder = BuildGraph()
             try:
                 graph = builder.build_graph_from_json(json_path)
                 logger.debug("Graph built successfully with %d vertices",
