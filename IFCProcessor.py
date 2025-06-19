@@ -4,9 +4,7 @@ import json
 import tempfile
 import logging
 import os
-import math
-from math import sqrt
-import numpy as np
+
 
 from RoomType import RoomType
 from MaterialReflection import MaterialReflection
@@ -17,6 +15,17 @@ logger = logging.getLogger(__name__)
 # הגדרות גיאומטריה גלובליות
 GEOMETRY_SETTINGS = ifcopenshell.geom.settings()
 GEOMETRY_SETTINGS.set(GEOMETRY_SETTINGS.USE_WORLD_COORDS, True)
+
+#הגדרות קטגוריות אלמנטים
+ELEMENT_CATEGORIES = {
+    "walls": ["IfcWall", "IfcWallStandardCase"],
+    "windows": ["IfcWindow", "IfcWindowStandardCase"],
+    "doors": ["IfcDoor", "IfcDoorStandardCase"],
+    "slabs": ["IfcSlab"],
+    "furniture": ["IfcFurnishingElement"],
+    "fixtures": ["IfcFlowTerminal"]
+}
+
 
 
 def process_ifc_file(file_path: str, room_type: str) -> str:
@@ -64,12 +73,11 @@ def process_ifc_file(file_path: str, room_type: str) -> str:
 def extract_room_info(model, room_type) -> dict:
     """חילוץ מידע על חדר """
     room_info = {
-        "RecommendedLux": 300,
+        "RecommendedLux": None,
         "RoomType": room_type or "unknown",
-        "RoomHeight": 2.5,
-        "RoomArea": 20.0
+        "RoomHeight": None,
+        "RoomArea": None
     }
-
     try:
         # חילוץ מידע מ-IfcSpace
         spaces = model.by_type("IfcSpace")
@@ -77,12 +85,6 @@ def extract_room_info(model, room_type) -> dict:
         if spaces:
             logger.debug("נמצאו %d מרחבים, לוקח את הראשון", len(spaces))
             main_space = spaces[0]
-
-            # זיהוי סוג החדר מהשם אם לא סופק
-            if not room_type:
-                space_name = getattr(main_space, "Name", "").lower()
-                space_long_name = getattr(main_space, "LongName", "").lower()
-                room_info["RoomType"] = identify_room_type_from_name(space_name, space_long_name)
 
             # חילוץ מידות מהמרחב
             space_geometry = extract_space_geometry(main_space)
@@ -98,7 +100,7 @@ def extract_room_info(model, room_type) -> dict:
                                          (room_bounds['max_y'] - room_bounds['min_y']))
 
     except Exception as e:
-        logger.warning("שגיאה בחילוץ מידע, משתמש בברירות מחדל")
+        logger.warning("שגיאה בחילוץ מידע")
 
     # קביעת לוקס מומלץ לפי סוג החדר
     room_type_enum = RoomType.get_by_name(room_info["RoomType"])
@@ -145,18 +147,9 @@ def calculate_room_bounds_from_walls(model) -> dict:
 
 def extract_all_elements(model) -> list:
     """חילוץ כל האלמנטים בחדר"""
-    elements_by_type = {
-        "walls": ["IfcWall", "IfcWallStandardCase"],
-        "windows": ["IfcWindow", "IfcWindowStandardCase"],
-        "doors": ["IfcDoor", "IfcDoorStandardCase"],
-        "slabs": ["IfcSlab"],
-        "furniture": ["IfcFurnishingElement"],
-        "fixtures": ["IfcFlowTerminal"]
-    }
-
     elements_data = []
 
-    for category, ifc_types in elements_by_type.items():
+    for category, ifc_types in ELEMENT_CATEGORIES.items():
         for ifc_type in ifc_types:
             try:
                 elements = model.by_type(ifc_type)
@@ -177,33 +170,9 @@ def extract_all_elements(model) -> list:
     return elements_data
 
 
-def identify_room_type_from_name(room_name, room_long_name=""):
-    """זיהוי סוג החדר מהשם"""
-    name_combined = f"{room_name} {room_long_name}".lower()
-
-    room_types = {
-        "bedroom": ["bedroom", "חדר שינה", "שינה", "bed", "sleeping", "dormitory"],
-        "living": ["living", "סלון", "מגורים", "lounge", "family", "sitting"],
-        "kitchen": ["kitchen", "מטבח", "cook", "dining", "אוכל"],
-        "bathroom": ["bathroom", "שירותים", "אמבטיה", "מקלחת", "bath", "toilet", "shower", "wc"],
-        "office": ["office", "משרד", "study", "עבודה", "work", "desk"]
-    }
-
-    for room_type, keywords in room_types.items():
-        if any(keyword in name_combined for keyword in keywords):
-            return room_type
-
-    return "unknown"
-
-
 def extract_space_geometry(space):
-    """חילוץ גיאומטריה של חדר (IfcSpace)"""
-    location_data = {
-        "CenterX": 0,
-        "CenterY": 0,
-        "Height": 2.5,
-        "Area": 20.0
-    }
+    """חילוץ גיאומטריה של חדר (IfcSpace) """
+    location_data = {}
 
     try:
         # חילוץ גיאומטריה
@@ -230,7 +199,7 @@ def extract_space_geometry(space):
     except Exception as e:
         logger.debug(f"לא ניתן לחלץ גיאומטריה לחדר: {str(e)}")
 
-    #  חילוץ מתכונות
+    # חילוץ מתכונות
     try:
         psets = get_element_properties(space)
         for prop_set_name, props in psets.items():
@@ -241,18 +210,13 @@ def extract_space_geometry(space):
     except Exception as e:
         logger.debug(f"לא ניתן לחלץ תכונות חדר: {str(e)}")
 
-    return location_data
+    return location_data if location_data else None
 
 
 def extract_geometry_coordinates(element):
     """
     מחלץ קואורדינטות גיאומטריות אמיתיות של אלמנט
     """
-    result = {
-        "X": 0, "Y": 0, "Z": 0,
-        "Width": 0, "Length": 0, "Height": 0
-    }
-
     try:
         geom = ifcopenshell.geom.create_shape(GEOMETRY_SETTINGS, element)
 
@@ -272,28 +236,28 @@ def extract_geometry_coordinates(element):
                     min_y, max_y = min(y_coords), max(y_coords)
                     min_z, max_z = min(z_coords), max(z_coords)
 
-                    result["X"] = min_x
-                    result["Y"] = min_y
-                    result["Z"] = min_z
-                    result["Width"] = max_x - min_x
-                    result["Length"] = max_y - min_y
-                    result["Height"] = max_z - min_z
-
-                    return result
+                    return {
+                        "X": min_x,
+                        "Y": min_y,
+                        "Z": min_z,
+                        "Width": max_x - min_x,
+                        "Length": max_y - min_y,
+                        "Height": max_z - min_z
+                    }
 
     except Exception as e:
         logger.debug("לא ניתן לחלץ גיאומטריה עבור אלמנט %s: %s",
                      getattr(element, 'GlobalId', 'unknown'), str(e))
 
-    return extract_fallback_location_and_dimensions(element)
+    fallback = extract_fallback_location_and_dimensions(element)
+    if fallback:
+        return fallback
+    return None
 
 
 def extract_fallback_location_and_dimensions(element):
     """שיטה חלופית לחילוץ מיקום ומידות"""
-    result = {
-        "X": 0, "Y": 0, "Z": 0,
-        "Width": 0, "Length": 0, "Height": 0
-    }
+    result = {}
 
     # ניסיון לחילוץ מיקום מתוך ObjectPlacement
     try:
@@ -304,41 +268,33 @@ def extract_fallback_location_and_dimensions(element):
                 coords = rel_placement.Location.Coordinates
                 result["X"] = float(coords[0])
                 result["Y"] = float(coords[1])
-                result["Z"] = float(coords[2]) if len(coords) > 2 else 0
+                if len(coords) > 2:
+                    result["Z"] = float(coords[2])
     except Exception as e:
         logger.debug("לא ניתן לחלץ מיקום יחסי: %s", str(e))
 
     # ניסיון לחילוץ מידות מתוך מאפיינים
     try:
-        quantities = {}
-
         if hasattr(element, "IsDefinedBy"):
             for rel in element.IsDefinedBy:
                 if rel.is_a("IfcRelDefinesByProperties") and hasattr(rel, "RelatingPropertyDefinition"):
                     prop_def = rel.RelatingPropertyDefinition
-
                     if prop_def.is_a("IfcElementQuantity") and hasattr(prop_def, "Quantities"):
                         for quantity in prop_def.Quantities:
                             if quantity.is_a("IfcQuantityLength") and hasattr(quantity, "LengthValue"):
                                 name_upper = quantity.Name.upper()
+                                value = float(quantity.LengthValue)
                                 if "LENGTH" in name_upper:
-                                    quantities["Length"] = float(quantity.LengthValue)
+                                    result["Length"] = value
                                 elif "WIDTH" in name_upper:
-                                    quantities["Width"] = float(quantity.LengthValue)
+                                    result["Width"] = value
                                 elif "HEIGHT" in name_upper:
-                                    quantities["Height"] = float(quantity.LengthValue)
-
-        for key in ["Length", "Width", "Height"]:
-            if key in quantities and quantities[key] > 0:
-                result[key] = quantities[key]
-
+                                    result["Height"] = value
     except Exception as e:
         logger.debug("שגיאה בחילוץ מידות מתוך מאפיינים: %s", str(e))
 
-    # ברירות מחדל לפי סוג האלמנט
-    if result["Width"] == 0 or result["Length"] == 0 or result["Height"] == 0:
-        element_type = element.is_a()
-        apply_default_dimensions(result, element_type)
+    if not result:
+        return None
 
     return result
 
@@ -363,76 +319,36 @@ def apply_default_dimensions(result, element_type):
 
 def extract_element_data(element, model, category):
     """מחלץ מידע מפורט על אלמנט"""
-    element_name = getattr(element, "Name", None) or ""
+
+    element_name = getattr(element, "Name", "") or ""
     element_type = element.is_a()
 
-    # זיהוי סוג האלמנט
-    element_type_mapping = {
-        "IfcWall": "קיר",
-        "IfcWallStandardCase": "קיר",
-        "IfcWindow": "חלון",
-        "IfcWindowStandardCase": "חלון",
-        "IfcDoor": "דלת",
-        "IfcDoorStandardCase": "דלת",
-        "IfcSlab": "רצפה/תקרה",
-        "IfcFurnishingElement": "ריהוט",
-        "IfcFlowTerminal": "אביזר",
-        "IfcSpace": "חדר"
-    }
-
-    element_type_hebrew = element_type_mapping.get(element_type, element_type)
-
-    # זיהוי סוג האלמנט לפי שם
     element_subtype = ""
-    name_lower = element_name.lower() if element_name else ""
-
-    furniture_types = {
-        "table": ["table", "שולחן"],
-        "desk": ["desk", "שולחן עבודה", "שולחן כתיבה"],
-        "chair": ["chair", "כיסא"],
-        "sofa": ["sofa", "ספה"],
-        "bed": ["bed", "מיטה"],
-        "cabinet": ["cabinet", "ארון"],
-        "counter": ["counter", "דלפק", "משטח עבודה"]
-    }
-
-    for ftype, keywords in furniture_types.items():
-        if any(kw in name_lower for kw in keywords):
-            element_subtype = ftype
-            break
 
     # חילוץ מיקום ומידות באמצעות הגיאומטריה
     location_data = extract_geometry_coordinates(element)
+    if not location_data:
+        return None
 
-    # חלץ חומרים
+    # חילוץ חומרים
     materials_str = extract_materials(element, model)
 
     # מאפייני החזרת אור לפי החומר
     material_reflection = MaterialReflection.get_by_material_name(materials_str)
 
-    # קביעת דרישות תאורה לאלמנט
-    required_lux = 0
-    if element_subtype in ["table", "desk", "counter"]:
-        if element_subtype == "desk":
-            required_lux = 500
-        else:
-            required_lux = 300
-
-    # יצירת המילון
     element_data = {
-        "ElementType": element_subtype or element_type_hebrew,
-        "X": location_data.get("X", 0),
-        "Y": location_data.get("Y", 0),
-        "Z": location_data.get("Z", 0),
-        "Width": location_data.get("Width", 0),
-        "Length": location_data.get("Length", 0),
-        "Height": location_data.get("Height", 0),
-        "Material": materials_str,
-        "RequiredLuks": required_lux
+        "ElementType": element_type,
+        "Name": element_name,
+        "X": location_data.get("X"),
+        "Y": location_data.get("Y"),
+        "Z": location_data.get("Z"),
+        "Width": location_data.get("Width"),
+        "Length": location_data.get("Length"),
+        "Height": location_data.get("Height"),
+        "Material": materials_str
     }
 
-    # הוספת מקדם החזרת אור
-    if material_reflection.reflection_factor > 0:
+    if material_reflection and material_reflection.reflection_factor > 0:
         element_data["ReflectionFactor"] = material_reflection.reflection_factor
 
     return element_data

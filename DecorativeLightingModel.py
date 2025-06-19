@@ -12,7 +12,7 @@ class DecorativeLightingModel:
             "bathroom": {
                 "allowed_elements": ["mirror", "sink", "toilet", "bathtub"],
                 "recommendations_map": {
-                    "mirror": ["תאורה ליד מראה לאיפור/גילוח"],
+                    "mirror": ["תאורה ליד מראה לאיפור"],
                     "sink": ["תאורת עבודה מעל הכיור"],
                     "toilet": ["תאורת אווירה עדינה"],
                     "bathtub": ["תאורת אווירה מרגיעה לאמבטיה"],
